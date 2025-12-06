@@ -1,14 +1,22 @@
 # FALCON
 Framework for Airfoil CFD and anaLysis OptimizatioN
+
 Tool for PARSEC and CST parameterization with Xfoil and SU2 analysis
 
 Features:
+
 -> User-friendly GUI enables airfoil to be chosen from a simple drop down list for analysis
+
 -> Airfoil paramterization using CST and PARSEC of any chosen airfoil and gives the respective paramters
+
 -> XFOIL analysis embedded in GUI for simulation over a range of angle of attack
+
 -> Automated meshing of airfoil using GMSH
+
 -> CFD analysis of airfoil in SU2 over a range of angle of attack with automated post-processing plots
+
 -> Integrates SU2 with validated, automated solver settings chosen on the basis of the given initial conditions.
+
 -> Real-time residual monitoring
 
 Instructions for installation:
