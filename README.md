@@ -32,6 +32,7 @@ Pre-requisites:
 -> Python: Can be installed at https://www.python.org/downloads/
 
 Python packages in requirements.txt can be installed in terminal using: python -m pip install -r requirements.txt
+
 Run main.py for using the tool.
 
 
