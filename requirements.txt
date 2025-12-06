@@ -1,0 +1,10 @@
+numpy
+tk
+pandas
+scipy
+matplotlib
+pyxfoil
+gmsh
+Pillow
+pandas
+pyvista
