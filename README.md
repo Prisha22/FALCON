@@ -1,4 +1,4 @@
-# FALCON
+## FALCON
 Framework for Airfoil CFD and anaLysis OptimizatioN
 
 Tool for PARSEC and CST parameterization with Xfoil and SU2 analysis
