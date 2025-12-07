@@ -35,4 +35,5 @@ Python packages in requirements.txt can be installed in terminal using: python -
 
 Run main.py for using the tool.
 
-
+# Copyright
+Copyright is held by Manipal Academy of Higher Education (MAHE). Released under MIT License.
