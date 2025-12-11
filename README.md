@@ -28,11 +28,13 @@ FALCON is an open-source Python-based GUI framework designed to facilitate airfo
 
 ### Pre-requisites
 
-* SU2 $\rightarrow$ https://su2code.github.io/ $\rightarrow$ Can be installed with or without MPI
+* SU2 $\rightarrow$ https://su2code.github.io/ $\rightarrow$ Can be installed with or without MPI. Add the address of the folder containing the SU2_CFD executable (bin folder) to the system's PATH variable.
 
-* XFoil $\rightarrow$ https://web.mit.edu/drela/Public/web/xfoil/
+* Microsoft MPI $\rightarrow$ https://www.microsoft.com/en-us/download/details.aspx?id=100593 $\rightarrow$ Verify that the path of the executable is stored in the system's PATH.
 
-* Python $\rightarrow$ https://www.python.org/downloads/
+* XFoil $\rightarrow$ https://web.mit.edu/drela/Public/web/xfoil/ 
+
+* Python $\rightarrow$ https://www.python.org/downloads/ $\rightarrow$ Python 3.11 and above versions are recommended for stable performance.
 
 * Python specific packages $\rightarrow$
 
