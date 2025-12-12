@@ -54,7 +54,12 @@ python -m pip install -r requirements.txt
 ### Usage
 
 ```bash
-python3 main.py
+python main.py
+```
+### Cite As
+
+```bash
+Prisha Desai, Anwak Manoj Kumar, and Manikandan Murugaiah "FALCON: Framework for Airfoil CFD and anaLysis OptimizatioN", https://github.com/Prisha22/FALCON
 ```
 
 ### References
