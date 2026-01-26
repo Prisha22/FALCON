@@ -126,11 +126,10 @@ class Parsec:
             rlow = abs(1 / (2 * coeffs_le_low[0])) if coeffs_le_low[0] != 0 else 0.01
         else:
             rlow = 0.01
-
-        det_value = abs((xcoords[1] - xcoords[0]) * (ycoords[-2] - ycoords[-1]) - 
-                       (ycoords[1] - ycoords[0]) * (xcoords[-2] - xcoords[-1]))
+        det_value = ((xcoords[1] - xcoords[0]) * (ycoords[-2] - ycoords[-1]) - 
+                    (ycoords[1] - ycoords[0]) * (xcoords[-2] - xcoords[-1]))
         dot_product = ((xcoords[1] - xcoords[0]) * (xcoords[-2] - xcoords[-1]) + 
-                      (ycoords[1] - ycoords[0]) * (ycoords[-2] - ycoords[-1]))
+                    (ycoords[1] - ycoords[0]) * (ycoords[-2] - ycoords[-1]))
         beta = math.atan2(det_value, dot_product) * 180 / math.pi
         
         xx = np.zeros((5, 1))
@@ -150,14 +149,14 @@ class Parsec:
         x2, y2 = xx[1], yy[1]
         x3, y3 = xx[2], yy[2]
 
-        det_value = abs((x1 - x2) * (y3 - y2) - (y1 - y2) * (x3 - x2))
+        det_value = (x1 - x2) * (y3 - y2) - (y1 - y2) * (x3 - x2)
         dot_product = (x1 - x2) * (x3 - x2) + (y1 - y2) * (y3 - y2)
         alpha = math.atan2(det_value, dot_product) * 180 / math.pi
 
         p = np.array([rUp, rlow, x_maxy, ymax, slopeUp, x_miny, ymin, slopeLow, te_t, y_te, alpha, beta])
         self.p = p
-        print("Parsec parameters:", p)
         return p
+
 
     def fun_to_min(self, p):
         try:
@@ -278,37 +277,62 @@ class Parsec:
         if self.p is None:
             self.analysis()
         
-        # Set bounds for parameters to keep them physically valid
-        # [rUp, rlow, x_maxy, ymax, slopeUp, x_miny, ymin, slopeLow, te_t, y_te, alpha, beta]
+        y_coords = self.ycoords
+        y_max = np.max(y_coords)
+        y_min = np.min(y_coords)
+        y_range = y_max - y_min
+        
+        # Find approximate max/min locations
+        idx_max = np.argmax(y_coords)
+        idx_min = np.argmin(y_coords)
+        x_max_approx = self.xcoords[idx_max] if idx_max < len(self.xcoords) else 0.3
+        x_min_approx = self.xcoords[idx_min] if idx_min < len(self.xcoords) else 0.3
+        
+        # Ensure initial guess is within bounds
+        p_init = self.p.copy()
+        
+    
         lower_bounds = [
-            1e-6,    # rUp
-            1e-6,    # rlow 
-            0.05,    # x_maxy 
-            -0.5,    # ymax
-            -50,     # slopeUp 
-            0.05,    #x_miny 
-            -0.5,    #ymin
-            -50,     # slopeLow
-            -0.1,    # te_t 
-            -0.5,    # y_te
-            -45,     # alpha 
-            -45      # beta 
+            1e-5,                          # rUp - leading edge radius upper
+            1e-5,                          # rlow - leading edge radius lower
+            max(0.1, x_max_approx - 0.3),  # x_maxy - max thickness x location
+            max(-0.2, y_min - 0.1),        # ymax - allow below if needed
+            -20,                           # slopeUp - upper surface slope
+            max(0.1, x_min_approx - 0.3),  # x_miny - min thickness x location
+            min(-0.2, y_min - 0.05),       # ymin - lower bound for ymin
+            -20,                           # slopeLow - lower surface slope
+            -0.05,                         # te_t - trailing edge thickness
+            min(-0.1, y_min),              # y_te - trailing edge y position
+            -30,                           # alpha - trailing edge angle
+            -30                            # beta - trailing edge wedge angle
         ]
+        
         upper_bounds = [
-            1.0,     # rUp
-            1.0,     # rlow
-            0.95,    # x_maxy
-            0.5,     # ymax
-            50,      # slopeUp
-            0.95,    # x_miny
-            0.5,     # ymin
-            50,      # slopeLow
-            0.1,     # te_t
-            0.5,     #y_te
-            45,      # alpha
-            45       # beta
+            0.05,                          # rUp - reasonable upper LE radius
+            0.05,                          # rlow - reasonable lower LE radius
+            min(0.85, x_max_approx + 0.3), # x_maxy - max thickness location
+            max(0.2, y_max + 0.1),         # ymax - allow above if needed
+            20,                            # slopeUp
+            min(0.85, x_min_approx + 0.3), # x_miny - min thickness location
+            max(0.1, y_max + 0.05),        # ymin - upper bound for ymin
+            20,                            # slopeLow
+            0.05,                          # te_t
+            max(0.1, y_max),               # y_te
+            30,                            # alpha
+            30                             # beta
         ]
-            
+        
+        for i in range(len(p_init)):
+            if p_init[i] < lower_bounds[i]:
+                p_init[i] = lower_bounds[i] + (upper_bounds[i] - lower_bounds[i]) * 0.1
+            elif p_init[i] > upper_bounds[i]:
+                p_init[i] = upper_bounds[i] - (upper_bounds[i] - lower_bounds[i]) * 0.1
+        
+        for i, (p, lb, ub) in enumerate(zip(p_init, lower_bounds, upper_bounds)):
+            if not (lb <= p <= ub):
+                print(f"Warning: Parameter {i} still infeasible after adjustment")
+                p_init[i] = (lb + ub) / 2  # Use midpoint as last resort
+        
         options = {
             'ftol': 1e-8,
             'xtol': 1e-8,
@@ -320,7 +344,7 @@ class Parsec:
         try:
             result = least_squares(
                 self.fun_to_min, 
-                self.p, 
+                p_init,  # Use adjusted initial guess
                 bounds=(lower_bounds, upper_bounds),
                 method='trf',
                 **options
@@ -330,16 +354,15 @@ class Parsec:
                 print(f"Warning: Optimization did not fully converge: {result.message}")
             
             para = result.x
-            # Clip final parameters
-            para[2] = np.clip(para[2], 0.01, 0.99)
-            para[5] = np.clip(para[5], 0.01, 0.99)
-            para[0] = max(para[0], 1e-6)
-            para[1] = max(para[1], 1e-6)
+            para[2] = np.clip(para[2], 0.1, 0.85)  # x_maxy
+            para[5] = np.clip(para[5], 0.1, 0.85)  # x_miny
+            para[0] = max(para[0], 1e-5)           # rUp
+            para[1] = max(para[1], 1e-5)           # rlow
             
             foil_normalized = self.parsec_for_fit_build(self.xcoords, para)
             
-            print(f"Optimization complete. Final cost: {result.cost:.6e}")
-            print(f"Final parameters: {para}")
+            print(f"PARSEC optimization complete. Final cost: {result.cost:.6e}")
+            print(f"PARSEC parameters: {para}")
             
         except Exception as e:
             print(f"PARSEC fitting failed: {e}")
