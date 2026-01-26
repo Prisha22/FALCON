@@ -151,7 +151,7 @@ class CST:
 
         foil2 = self.CSTForFitBuild(self.xcoords, weights, flw, 0.5, 1)
         
-        return foil2
+        return foil2,weights,best_result
 
     def foil(self, return_original_coords=True):
         """
@@ -168,7 +168,9 @@ class CST:
         foil_coords : numpy array
             Fitted y-coordinates (normalized or original based on parameter)
         """
-        foil_normalized = self.getCST(self.xcoords, self.ycoords)
+        foil_normalized,weights,best_result = self.getCST(self.xcoords, self.ycoords)
+        print(f"CST optimization complete. Final cost: {best_result.cost:.6e}")
+        print(f"CST parameters: {weights}")
         
         if return_original_coords:
             # Convert back to original coordinate system
