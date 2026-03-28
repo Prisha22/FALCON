@@ -1,7 +1,7 @@
-numpy <= 1.26.4
-tk
+numpy
+PyQt6
 pandas
-scipy <=1.14.0
+scipy
 matplotlib
 pyxfoil
 gmsh
