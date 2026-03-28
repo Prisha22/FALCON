@@ -55,66 +55,56 @@ class Interpolate:
         if len(x_interp_l) != len(y_interp_l):
             raise ValueError("Lower surface x and y arrays must have the same length.")
 
-        # Refine leading edge with cosine interpolation
         upper_refined_x = self.refine_leading_edge(x_interp_u, len(y_interp_u))
         lower_refined_x = self.refine_leading_edge(x_interp_l, len(y_interp_l))
 
-        # Interpolate y-coordinates for refined x
         y_interp_u = np.interp(upper_refined_x, x_interp_u, y_interp_u)
         y_interp_l = np.interp(lower_refined_x, x_interp_l, y_interp_l)
 
-        # Use splprep for smoothing and interpolation
         tck_u, u_u = splprep([upper_refined_x, y_interp_u], k=3, s=0)
         tck_l, u_l = splprep([lower_refined_x, y_interp_l], k=3, s=0)
         u = np.linspace(0, 1, n_points)
         x_u, y_u = splev(u, tck_u)
         x_l, y_l = splev(u, tck_l)
 
-        # Combine points and save
         upper_surface = [[x, y] for x, y in zip(x_u, y_u)]
         lower_surface = [[x, y] for x, y in zip(x_l, y_l)]
 
-        # Reverse upper surface (so it goes from TE to LE)
         upper_surface = upper_surface[::-1]
-        upper_te_point = upper_surface[0]  # Trailing edge upper
-        lower_te_point = lower_surface[-1]  # Trailing edge lower
+        upper_te_point = upper_surface[0]
+        lower_te_point = lower_surface[-1]
 
-        # Calculate averaged trailing edge point
         te_x = (upper_te_point[0] + lower_te_point[0]) / 2
         te_y = (upper_te_point[1] + lower_te_point[1]) / 2
 
-        # Set both trailing edge points to the same value
         upper_surface[0] = [te_x, te_y]
         lower_surface[-1] = [te_x, te_y]
 
-        # Get the leading edge points
-        upper_le_point = upper_surface[-1]  # Leading edge upper
-        lower_le_point = lower_surface[0]   # Leading edge lower
+        upper_le_point = upper_surface[-1]
+        lower_le_point = lower_surface[0]
 
-        # Calculate averaged leading edge point
         le_x = (upper_le_point[0] + lower_le_point[0]) / 2
         le_y = (upper_le_point[1] + lower_le_point[1]) / 2
 
-        # Set both leading edge points to the same value
         upper_surface[-1] = [le_x, le_y]
         lower_surface[0] = [le_x, le_y]
 
         self.upper_surface = upper_surface
         self.lower_surface = lower_surface
-        
+
         self.points = self.upper_surface + self.lower_surface[1:]
 
         x_new = np.concatenate((x_u, x_l))
         y_new = np.concatenate((y_u, y_l))
-        data = np.array(self.points)  
+        data = np.array(self.points)
         print(f"First point (TE upper): {data[0]}")
         print(f"Last point (TE lower): {data[-1]}")
         print(f"Distance between TE points: {np.linalg.norm(data[0] - data[-1])}")
-        
+
         data_closed = np.vstack([data, data[0]])
-        
+
         print("Extracted points:\n", data_closed)
-        x_points = data_closed[:, 0]  
+        x_points = data_closed[:, 0]
         y_points = data_closed[:, 1]
         os.chdir(int_path)
         np.savetxt('output.dat', data_closed, header="r", comments="")

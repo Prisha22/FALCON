@@ -1,1302 +1,1021 @@
-import os, sys
-import tkinter as tk
-from tkinter import Menu, Label, Entry, Button, ttk, messagebox
-from tkinter import filedialog
-from PIL import Image, ImageTk
-import matplotlib.pyplot as plt
-plt.switch_backend('agg')
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import sys
+import os
 import threading
-import numpy as np
-from queue import Queue
 import multiprocessing
+import numpy as np
 import re
-
-# Local imports
-from su2_analyzer import (
-    SU2Runner,
-    execute_su2_analysis_workflow,
-    extract_su2_polar_data,
-    SU2_INCOMPRESSIBLE_SETTINGS,
-    SU2_COMPRESSIBLE_SETTINGS
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QGridLayout, QTabWidget, QLabel, QLineEdit, QPushButton,
+    QTextEdit, QListWidget, QComboBox, QCheckBox, QSplitter,
+    QFileDialog, QGroupBox, QScrollArea, QMessageBox, QFrame, QFormLayout
 )
+from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer
+from PyQt6.QtGui import QPixmap, QImage, QFont
 
-from live_plotter import LivePlotterWindow
+import matplotlib
+
+matplotlib.use('QtAgg')
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
+from matplotlib.figure import Figure
+import matplotlib.cm as cm
+
+from su2_analyzer import (
+    SU2Runner, execute_su2_analysis_workflow, extract_su2_polar_data,
+    SU2_INCOMPRESSIBLE_SETTINGS, SU2_COMPRESSIBLE_SETTINGS
+)
 import read_airfoil
 from parsec import Parsec
 from cst import CST
 from interpolate import Interpolate
-from xfoil1 import perform_xfoil_analysis
 from hybrid import generate_hybrid
 from meshing import generate_mesh
+import xfoil1
+from live_plotter import LivePlotterWindow
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
 
+class ConvergenceSettings(QGroupBox):
+    """Replicates the Convergence Settings UI block."""
 
-class ConvergenceSettings:
-    def __init__(self, parent_frame, start_row):
-        """
-        Integrates directly into the parent frame using grid layout.
-        """
-        self.parent = parent_frame
-        sep = ttk.Separator(parent_frame, orient='horizontal')
-        sep.grid(row=start_row, column=0, columnspan=3, sticky="ew", pady=(15, 10))
-        header_lbl = ttk.Label(parent_frame, text="Convergence Criteria", font=('Segoe UI', 9, 'bold'))
-        header_lbl.grid(row=start_row + 1, column=0, columnspan=3, sticky="w", padx=5, pady=(0, 5))
-        ttk.Label(parent_frame, text="Min log10 Residual:").grid(
-            row=start_row + 2, column=0, padx=(10, 5), pady=5, sticky="w"
-        )
-        self.res_min_var = tk.StringVar(value="-8.0")
-        ttk.Entry(parent_frame, textvariable=self.res_min_var).grid(
-            row=start_row + 2, column=1, columnspan=2, padx=5, pady=5, sticky="ew"
-        )
-        ttk.Label(parent_frame, text="Max Iterations:").grid(
-            row=start_row + 3, column=0, padx=(10, 5), pady=5, sticky="w"
-        )
-        self.max_iter_var = tk.StringVar(value="5000")
-        ttk.Entry(parent_frame, textvariable=self.max_iter_var).grid(
-            row=start_row + 3, column=1, columnspan=2, padx=5, pady=5, sticky="ew"
-        )
+    def __init__(self):
+        super().__init__("Convergence Criteria")
+        layout = QFormLayout()
+
+        self.res_min_input = QLineEdit("-8.0")
+        self.max_iter_input = QLineEdit("5000")
+
+        layout.addRow("Min log10 Residual:", self.res_min_input)
+        layout.addRow("Max Iterations:", self.max_iter_input)
+        self.setLayout(layout)
 
     def toggle_turbulence(self, is_turbulent):
-        """Kept for compatibility; no per-equation residuals now."""
         pass
 
     def get_config_string(self, is_inviscid=False):
-        """
-        Returns:
-            residual_threshold_str, max_iter_str
-        """
-        return self.res_min_var.get(), self.max_iter_var.get()
+        return self.res_min_input.text(), self.max_iter_input.text()
+
+
+class LoggerSignals(QObject):
+    """Signals for thread-safe logging."""
+    write_log = pyqtSignal(str, str)
+
+
+class QtTextRedirector:
+    """Redirects stdout/stderr to the GUI log window."""
+
+    def __init__(self, signal, tag="stdout"):
+        self.signal = signal
+        self.tag = tag
+
+    def write(self, text):
+        if text: self.signal.write_log.emit(str(text), self.tag)
+
+    def flush(self): pass
 
 
 def error(foil1, foil2, ycoords):
     rmse1 = np.sqrt(np.mean((foil1 - ycoords) ** 2))
     rmse2 = np.sqrt(np.mean((foil2 - ycoords) ** 2))
-    print(f'PARSEC Root Mean Square Error (RMSE): {rmse1}\n')
-    print(f'CST Root Mean Square Error (RMSE): {rmse2}\n')
+    print(f'PARSEC Root Mean Square Error (RMSE): {rmse1}')
+    print(f'CST Root Mean Square Error (RMSE): {rmse2}')
     return ("PARSEC" if rmse1 < rmse2 else "CST"), rmse1, rmse2
 
 
-class TextRedirector(object):
-    def __init__(self, widget, tag="stdout"):
-        self.widget = widget
-        self.tag = tag
+class FalconApp(QMainWindow):
+    xfoil_finished_signal = pyqtSignal(list, list, float, str)
+    su2_finished_signal = pyqtSignal()
+    plot_su2_signal = pyqtSignal(list)
+    request_plot_window_signal = pyqtSignal(object, float, bool)
 
-    def write(self, str):
-        try:
-            self.widget.after(0, self.insert_text, str)
-        except:
-            pass
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("FALCON : Framework for Airfoil CFD and anaLysis OptimizatioN")
+        self.resize(1300, 900)
 
-    def insert_text(self, str):
-        try:
-            self.widget.configure(state='normal')
-            self.widget.insert('end', str, (self.tag,))
-            self.widget.configure(state='disabled')
-            self.widget.see('end')
-        except:
-            pass
+        self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.directory = os.path.join(self.script_dir, "Airfoil_DAT_Selig")
+        print(f"Working Directory: {self.script_dir}")
 
-    def flush(self):
-        pass
-
-
-class App:
-    def __init__(self, root):
-        self.root = root
-        root.title("FALCON : Framework for Airfoil CFD and anaLysis OptimizatioN")
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-
-        self.script_dir = script_dir
-        print(f"Working Directory: {script_dir}")
-        self.folder_name = r"Airfoil_DAT_Selig"
-        self.directory = os.path.join(self.script_dir, self.folder_name)
+        self.su2_runner = SU2Runner()
+        self.live_windows = []
+        self.su2_setting_widgets = {}
         self.loaded_cfg_settings = {}
-        self.conv_settings = None  # Will be initialized in update_su2_settings_display
 
-        style = ttk.Style(self.root)
-        style.theme_use('clam')
-        main_paned_window = ttk.PanedWindow(root, orient=tk.HORIZONTAL)
-        main_paned_window.pack(expand=True, fill='both', padx=10, pady=10)
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
 
-        self.tabControl = ttk.Notebook(main_paned_window)
-        main_paned_window.add(self.tabControl, weight=3)
+        self.main_splitter = QSplitter(Qt.Orientation.Vertical)
+        main_layout.addWidget(self.main_splitter)
 
-        self.tab1 = ttk.Frame(self.tabControl)
-        self.tab2 = ttk.Frame(self.tabControl)
-        self.tab3 = ttk.Frame(self.tabControl)
-        self.tabControl.add(self.tab1, text='  Airfoil Parameterization  ')
-        self.tabControl.add(self.tab2, text='  XFOIL Analysis  ')
-        self.tabControl.add(self.tab3, text='  SU2 Analysis  ')
+        self.tabs = QTabWidget()
+        self.main_splitter.addWidget(self.tabs)
 
-        log_frame = ttk.LabelFrame(main_paned_window, text="Live Log Output")
-        main_paned_window.add(log_frame, weight=1)
+        log_group = QGroupBox("Live Log Output")
+        log_layout = QVBoxLayout(log_group)
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setStyleSheet("background-color: #2B2B2B; color: #F8F8F2; font-family: Consolas;")
+        log_layout.addWidget(self.log_text)
+        self.main_splitter.addWidget(log_group)
+        self.main_splitter.setSizes([700, 200])
 
-        log_frame.grid_rowconfigure(0, weight=1)
-        log_frame.grid_columnconfigure(0, weight=1)
-
-        log_scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL)
-        self.log_text = tk.Text(
-            log_frame,
-            height=20,
-            wrap=tk.WORD,
-            state='disabled',
-            yscrollcommand=log_scrollbar.set,
-            bg="#2B2B2B",
-            fg="#F8F8F2"
-        )
-        log_scrollbar.config(command=self.log_text.yview)
-
-        log_scrollbar.grid(row=0, column=1, sticky='ns')
-        self.log_text.grid(row=0, column=0, sticky='nsew')
-
-        self.log_text.tag_configure("stdout", foreground="#F8F8F2")
-        self.log_text.tag_configure("stderr", foreground="#FF5555")
-
-        self.stdout_redirector = TextRedirector(self.log_text, "stdout")
-        sys.stdout = self.stdout_redirector
-        self.stderr_redirector = TextRedirector(self.log_text, "stderr")
-        sys.stderr = self.stderr_redirector
+        self.log_sig = LoggerSignals()
+        self.log_sig.write_log.connect(self.append_log)
+        sys.stdout = QtTextRedirector(self.log_sig, "stdout")
+        sys.stderr = QtTextRedirector(self.log_sig, "stderr")
 
         print("--- Log initialized ---")
 
-        self.tab1.grid_columnconfigure(1, weight=1)
-        self.tab1.grid_rowconfigure(0, weight=1)
-        self.tab1.grid_rowconfigure(1, weight=1)
+        self.init_tab1()
+        self.init_tab2()
+        self.init_tab3()
 
-        self.list_frame = ttk.LabelFrame(self.tab1, text="Select Airfoil", labelanchor="n")
-        self.list_frame.grid(row=0, column=0, rowspan=2, padx=10, pady=10, sticky='nsew')
-        self.list_frame.grid_columnconfigure(0, weight=1)
-        self.list_frame.grid_columnconfigure(1, weight=0)
-        self.list_frame.grid_rowconfigure(1, weight=1)
+        self.xfoil_finished_signal.connect(self.on_xfoil_results)
+        self.su2_finished_signal.connect(self.on_su2_analysis_finish)
+        self.plot_su2_signal.connect(self.plot_su2_results)
+        self.request_plot_window_signal.connect(self.open_live_plotter)
 
-        ttk.Label(self.list_frame, text="Search:").grid(
-            row=0, column=0, padx=(10, 5), pady=(10, 5), sticky="w"
-        )
-        self.airfoil_search_var = tk.StringVar()
-        self.airfoil_search_entry = ttk.Entry(self.list_frame, textvariable=self.airfoil_search_var)
-        self.airfoil_search_entry.grid(
-            row=0, column=1, padx=(0, 10), pady=(10, 5), sticky="ew"
-        )
+    def append_log(self, text, tag):
+        color = "#F8F8F2" if tag == "stdout" else "#FF5555"
+        self.log_text.moveCursor(self.log_text.textCursor().MoveOperation.End)
+        self.log_text.insertHtml(f'<span style="color:{color};">{text}</span>'.replace("\n", "<br>"))
+        self.log_text.ensureCursorVisible()
 
-        listbox_frame = ttk.Frame(self.list_frame)
-        listbox_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="nsew")
-        listbox_frame.grid_columnconfigure(0, weight=1)
-        listbox_frame.grid_rowconfigure(0, weight=1)
+    def on_closing(self):
+        if self.su2_runner.current_process:
+            self.stop_su2_analysis()
+        self.close()
 
-        self.listbox = tk.Listbox(listbox_frame, height=20, width=40)
-        self.listbox.grid(row=0, column=0, sticky="nsew")
+    def init_tab1(self):
+        self.tab1 = QWidget()
+        self.tabs.addTab(self.tab1, "Airfoil Parameterization")
+        layout = QGridLayout(self.tab1)
 
-        scrollbar = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL, command=self.listbox.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        self.listbox.configure(yscrollcommand=scrollbar.set)
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+
+        sel_group = QGroupBox("Select Airfoil")
+        sel_layout = QVBoxLayout(sel_group)
+
+        h_search = QHBoxLayout()
+        h_search.addWidget(QLabel("Search:"))
+        self.airfoil_search_var = QLineEdit()
+        self.airfoil_search_var.textChanged.connect(self._update_airfoil_listbox)
+        h_search.addWidget(self.airfoil_search_var)
+        sel_layout.addLayout(h_search)
+
+        self.listbox = QListWidget()
+        self.listbox.itemSelectionChanged.connect(self.on_airfoil_change)
+        sel_layout.addWidget(self.listbox)
+        left_layout.addWidget(sel_group)
+
+        ctrl_group = QGroupBox("Controls")
+        ctrl_layout = QFormLayout(ctrl_group)
+
+        self.n_points_entry = QLineEdit("200")
+        ctrl_layout.addRow("Desired points:", self.n_points_entry)
+
+        self.int_path_entry = QLineEdit(os.path.join(os.getcwd(), "output"))
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(lambda: self.open_dir(self.int_path_entry))
+        h_path = QHBoxLayout()
+        h_path.addWidget(self.int_path_entry)
+        h_path.addWidget(browse_btn)
+        ctrl_layout.addRow("Output Path:", h_path)
+
+        self.analyze_button = QPushButton("Analyze && Generate Interpolated Airfoil")
+        self.analyze_button.setStyleSheet("font-weight: bold; padding: 5px;")
+        self.analyze_button.clicked.connect(self.analyze)
+        self.analyze_button.setEnabled(False)
+        ctrl_layout.addRow(self.analyze_button)
+
+        left_layout.addWidget(ctrl_group)
+
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+
+        plot_group = QGroupBox("Airfoil Plot")
+        plot_layout = QVBoxLayout(plot_group)
+        self.tab1_figure = Figure(figsize=(5, 4), facecolor='#1e1e1e')
+        self.tab1_canvas = FigureCanvasQTAgg(self.tab1_figure)
+        self.tab1_canvas.setStyleSheet("background-color: #1e1e1e;")
+        plot_layout.addWidget(self.tab1_canvas)
+        right_layout.addWidget(plot_group)
+
+        res_group = QGroupBox("Parameterization Results")
+        res_layout = QVBoxLayout(res_group)
+        self.method_label = QLabel("Method:")
+        self.parsec_error_label = QLabel("PARSEC Error:")
+        self.cst_error_label = QLabel("CST Error:")
+        self.output_path_label = QLabel("")
+
+        res_layout.addWidget(self.method_label)
+        res_layout.addWidget(self.parsec_error_label)
+        res_layout.addWidget(self.cst_error_label)
+        res_layout.addWidget(self.output_path_label)
+        right_layout.addWidget(res_group)
+
+        layout.addWidget(left_panel, 0, 0)
+        layout.addWidget(right_panel, 0, 1)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 2)
+
         if os.path.exists(self.directory):
             self.all_airfoils = [f for f in os.listdir(self.directory) if f.endswith('.dat')]
         else:
             self.all_airfoils = []
-            print(f"Warning: Directory {self.directory} not found.")
-
         self._update_airfoil_listbox()
-        self.listbox.bind('<<ListboxSelect>>', self.on_airfoil_change)
-        self.airfoil_search_var.trace_add("write", lambda *args: self._update_airfoil_listbox())
-        self.input_frame = ttk.LabelFrame(self.list_frame, text="Controls", labelanchor="n")
-        self.input_frame.grid(row=2, column=0, columnspan=2, padx=10, pady=10, sticky='ew')
-        self.input_frame.grid_columnconfigure(1, weight=1)
-        self.n_points_label = ttk.Label(self.input_frame, text="Desired points:")
-        self.n_points_label.grid(row=2, column=0, padx=(10, 5), pady=5, sticky='w')
-        self.n_points_entry = ttk.Entry(self.input_frame, width=10)
-        self.n_points_entry.grid(row=2, column=1, padx=(0, 10), pady=5, sticky='ew')
-        self.n_points_entry.insert(0, "200")
 
-        self.int_path_label = ttk.Label(self.input_frame, text="Output Path:")
-        self.int_path_label.grid(row=3, column=0, padx=10, pady=5, sticky='w')
-        self.int_path_entry = ttk.Entry(self.input_frame)
-        self.int_path_entry.insert(0, os.path.join(os.getcwd(), "output"))
-        self.int_path_entry.grid(row=4, column=0, columnspan=2, padx=10, pady=5, sticky='ew')
-
-        self.open_dir_button = ttk.Button(
-            self.input_frame,
-            text='Browse...',
-            command=lambda: self.open_dir(self.int_path_entry)
-        )
-        self.open_dir_button.grid(row=3, column=1, padx=(0, 10), pady=5, sticky='e')
-
-        self.analyze_button = ttk.Button(
-            self.input_frame,
-            text="Analyze & Generate Interpolated Airfoil",
-            command=self.analyze,
-            style='Accent.TButton'
-        )
-        self.analyze_button.grid(row=5, column=0, columnspan=2, padx=10, pady=10, sticky='ew')
-        style.configure('Accent.TButton', font=('Segoe UI', 10, 'bold'))
-
-        self.canvas_result_frame = ttk.LabelFrame(self.tab1, text="Airfoil Plot", labelanchor="n")
-        self.canvas_result_frame.grid(row=0, column=1, padx=(0, 10), pady=(10, 5), sticky='nsew')
-        self.canvas_result_frame.grid_rowconfigure(0, weight=1)
-        self.canvas_result_frame.grid_columnconfigure(0, weight=1)
-
-        self.result_frame = ttk.LabelFrame(self.tab1, text="Parameterization Results", labelanchor="n")
-        self.result_frame.grid(row=1, column=1, padx=(0, 10), pady=(5, 10), sticky='nsew')
-        self.result_frame.grid_columnconfigure(0, weight=1)
-
-        # --- Tab 2: XFOIL Analysis ---
-        self.tab2.grid_columnconfigure(1, weight=1)
-        self.tab2.grid_rowconfigure(0, weight=1)
-
-        self.xfoil_input_frame = ttk.LabelFrame(self.tab2, text="Input Parameters", labelanchor="n")
-        self.xfoil_input_frame.grid(row=0, column=0, padx=10, pady=10, sticky='nsew')
-        self.xfoil_input_frame.grid_columnconfigure(1, weight=1)
-
-        self.xfoil_path_label = ttk.Label(self.xfoil_input_frame, text="XFOIL Executable:")
-        self.xfoil_path_label.grid(row=0, column=0, padx=10, pady=5, sticky='w')
-        self.xfoil_path_entry = ttk.Entry(self.xfoil_input_frame, width=40)
-        self.xfoil_path_entry.grid(row=1, column=0, columnspan=2, padx=10, pady=(0, 5), sticky='ew')
-        self.xfoil_dir_button = ttk.Button(
-            self.xfoil_input_frame,
-            text="Browse...",
-            command=lambda: self.open_file(self.xfoil_path_entry)
-        )
-        self.xfoil_dir_button.grid(row=1, column=2, padx=(5, 10), pady=(0, 5), sticky='e')
-
-        self.re_label = ttk.Label(self.xfoil_input_frame, text="Reynolds Number:")
-        self.re_label.grid(row=2, column=0, padx=10, pady=5, sticky='w')
-        self.re_entry = ttk.Entry(self.xfoil_input_frame)
-        self.re_entry.insert(0, "1000000")
-        self.re_entry.grid(row=2, column=1, columnspan=2, padx=(0, 10), pady=5, sticky='ew')
-
-        self.mach_label = ttk.Label(self.xfoil_input_frame, text="Mach Number:")
-        self.mach_label.grid(row=3, column=0, padx=10, pady=5, sticky='w')
-        self.mach_entry = ttk.Entry(self.xfoil_input_frame)
-        self.mach_entry.insert(0, "0.0")
-        self.mach_entry.grid(row=3, column=1, columnspan=2, padx=(0, 10), pady=5, sticky='ew')
-
-        self.alpha_min_label = ttk.Label(self.xfoil_input_frame, text="Minimum Alpha:")
-        self.alpha_min_label.grid(row=4, column=0, padx=10, pady=5, sticky='w')
-        self.alpha_min_entry = ttk.Entry(self.xfoil_input_frame)
-        self.alpha_min_entry.insert(0, "0.0")
-        self.alpha_min_entry.grid(row=4, column=1, columnspan=2, padx=(0, 10), pady=5, sticky='ew')
-
-        self.alpha_max_label = ttk.Label(self.xfoil_input_frame, text="Maximum Alpha:")
-        self.alpha_max_label.grid(row=5, column=0, padx=10, pady=5, sticky='w')
-        self.alpha_max_entry = ttk.Entry(self.xfoil_input_frame)
-        self.alpha_max_entry.insert(0, "5.0")
-        self.alpha_max_entry.grid(row=5, column=1, columnspan=2, padx=(0, 10), pady=5, sticky='ew')
-
-        self.alpha_step_label = ttk.Label(self.xfoil_input_frame, text="Step:")
-        self.alpha_step_label.grid(row=6, column=0, padx=10, pady=5, sticky='w')
-        self.alpha_step_entry = ttk.Entry(self.xfoil_input_frame)
-        self.alpha_step_entry.insert(0, "1.0")
-        self.alpha_step_entry.grid(row=6, column=1, columnspan=2, padx=(0, 10), pady=5, sticky='ew')
-
-        self.xfoil_analyze_button = ttk.Button(
-            self.xfoil_input_frame,
-            text="Analyze with XFOIL",
-            command=self.xfoil_analyze_threaded,
-            style='Accent.TButton'
-        )
-        self.xfoil_analyze_button.grid(row=7, column=0, columnspan=3, padx=10, pady=10, sticky='ew')
-
-        self.xfoil_result_frame = ttk.LabelFrame(self.tab2, text="Polar Plot", labelanchor="n")
-        self.xfoil_result_frame.grid(row=0, column=1, padx=(0, 10), pady=10, sticky='nsew')
-        self.xfoil_result_frame.grid_rowconfigure(0, weight=1)
-        self.xfoil_result_frame.grid_columnconfigure(0, weight=1)
-
-        # --- Tab 3: SU2 Analysis ---
-        su2_notebook = ttk.Notebook(self.tab3)
-        su2_notebook.pack(expand=True, fill='both', padx=0, pady=0)
-
-        su2_tab_mesh = ttk.Frame(su2_notebook)
-        su2_tab_setup = ttk.Frame(su2_notebook)
-        su2_tab_results = ttk.Frame(su2_notebook)
-
-        su2_notebook.add(su2_tab_mesh, text='  Meshing & Conditions  ')
-        su2_notebook.add(su2_tab_setup, text='  Solver Setup & Run  ')
-        su2_notebook.add(su2_tab_results, text='  Results  ')
-
-        # --- "Meshing & Conditions" Sub-Tab ---
-        su2_tab_mesh.grid_columnconfigure(0, weight=1)
-        su2_tab_mesh.grid_columnconfigure(1, weight=1)
-        su2_tab_mesh.grid_rowconfigure(0, weight=1)
-
-        # 1. Mesh Generation
-        self.mesh_frame = ttk.LabelFrame(su2_tab_mesh, text="1. Mesh Generation", labelanchor="n")
-        self.mesh_frame.grid(row=0, column=0, padx=10, pady=10, sticky='nsew')
-
-        self.structured_mesh_button = ttk.Button(self.mesh_frame, text="Generate Structured Mesh", command=self.mesh)
-        self.structured_mesh_button.pack(padx=10, pady=10, fill='x')
-        self.hybrid_mesh_button = ttk.Button(self.mesh_frame, text="Generate Hybrid Mesh", command=self.hybrid)
-        self.hybrid_mesh_button.pack(padx=10, pady=(0, 10), fill='x')
-
-        y_plus_frame = ttk.Frame(self.mesh_frame)
-        y_plus_frame.pack(fill='x', padx=10, pady=5)
-        ttk.Label(y_plus_frame, text="Target y+:").pack(side=tk.LEFT, padx=(0, 5))
-        self.yplus_entry = ttk.Entry(y_plus_frame, width=10)
-        self.yplus_entry.insert(0, "1.0")
-        self.yplus_entry.pack(side=tk.LEFT, expand=True, fill='x')
-
-        self.show_gmsh_var = tk.BooleanVar(value=False)
-        self.show_gmsh_check = ttk.Checkbutton(
-            self.mesh_frame,
-            text="Show Interactive Gmsh Window",
-            variable=self.show_gmsh_var
-        )
-        self.show_gmsh_check.pack(padx=10, pady=10)
-
-        # 2. Flow Conditions
-        self.su2_flow_conditions_frame = ttk.LabelFrame(su2_tab_mesh, text="2. Flow Conditions", labelanchor="n")
-        self.su2_flow_conditions_frame.grid(row=0, column=1, padx=(0, 10), pady=10, sticky='nsew')
-        self.su2_flow_conditions_frame.grid_columnconfigure(1, weight=1)
-
-        ttk.Label(self.su2_flow_conditions_frame, text="Reynolds Number:").grid(
-            row=0, column=0, padx=(10, 5), pady=5, sticky='w'
-        )
-        self.su2_re_entry = ttk.Entry(self.su2_flow_conditions_frame)
-        self.su2_re_entry.insert(0, "1000000")
-        self.su2_re_entry.grid(row=0, column=1, padx=(0, 10), pady=5, sticky='ew')
-
-        ttk.Label(self.su2_flow_conditions_frame, text="Mach Number:").grid(
-            row=1, column=0, padx=(10, 5), pady=5, sticky='w'
-        )
-        self.su2_mach_entry = ttk.Entry(self.su2_flow_conditions_frame)
-        self.su2_mach_entry.insert(0, "0.15")
-        self.su2_mach_entry.grid(row=1, column=1, padx=(0, 10), pady=5, sticky='ew')
-
-        ttk.Label(self.su2_flow_conditions_frame, text="Min AoA:").grid(
-            row=2, column=0, padx=(10, 5), pady=5, sticky='w'
-        )
-        self.su2_alpha_min_entry = ttk.Entry(self.su2_flow_conditions_frame, width=10)
-        self.su2_alpha_min_entry.insert(0, "0.0")
-        self.su2_alpha_min_entry.grid(row=2, column=1, padx=(0, 10), pady=5, sticky='ew')
-
-        ttk.Label(self.su2_flow_conditions_frame, text="Max AoA:").grid(
-            row=3, column=0, padx=(10, 5), pady=5, sticky='w'
-        )
-        self.su2_alpha_max_entry = ttk.Entry(self.su2_flow_conditions_frame, width=10)
-        self.su2_alpha_max_entry.insert(0, "5.0")
-        self.su2_alpha_max_entry.grid(row=3, column=1, padx=(0, 10), pady=5, sticky='ew')
-
-        ttk.Label(self.su2_flow_conditions_frame, text="AoA Step:").grid(
-            row=4, column=0, padx=(10, 5), pady=5, sticky='w'
-        )
-        self.su2_alpha_step_entry = ttk.Entry(self.su2_flow_conditions_frame, width=10)
-        self.su2_alpha_step_entry.insert(0, "1.0")
-        self.su2_alpha_step_entry.grid(row=4, column=1, padx=(0, 10), pady=5, sticky='ew')
-
-        self.load_settings_button = ttk.Button(
-            self.su2_flow_conditions_frame,
-            text="Load Recommended Settings",
-            command=self.load_recommended_settings
-        )
-        self.load_settings_button.grid(row=5, column=0, columnspan=2, padx=10, pady=10, sticky='ew')
-
-        # --- "Solver Setup & Run" Sub-Tab ---
-        su2_tab_setup.grid_columnconfigure(0, weight=1)
-        su2_tab_setup.grid_rowconfigure(0, weight=1)
-        su2_tab_setup.grid_rowconfigure(1, weight=0)
-
-        # 3. SU2 Configuration (Main)
-        self.SU2_main_settings_frame = ttk.LabelFrame(
-            su2_tab_setup, text="3. SU2 Configuration", labelanchor="n"
-        )
-        self.SU2_main_settings_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-
-        # Flow type row (always visible at the top)
-        self.SU2_main_settings_frame.grid_columnconfigure(1, weight=1)
-        self.SU2_main_settings_frame.grid_rowconfigure(1, weight=1)
-
-        ttk.Label(self.SU2_main_settings_frame, text="Flow Type:").grid(
-            row=0, column=0, padx=(10, 5), pady=10, sticky="w"
-        )
-        self.flow_regime_var = tk.StringVar(value="Compressible")
-        self.flow_regime_combo = ttk.Combobox(
-            self.SU2_main_settings_frame,
-            textvariable=self.flow_regime_var,
-            values=["Incompressible", "Compressible"],
-            state="readonly",
-            width=15,
-        )
-        self.flow_regime_combo.grid(row=0, column=1, padx=(0, 10), pady=10, sticky="ew")
-        self.flow_regime_combo.bind("<<ComboboxSelected>>", self.update_su2_settings_display)
-
-        self.su2_cfg_canvas = tk.Canvas(
-            self.SU2_main_settings_frame, highlightthickness=0
-        )
-        self.su2_cfg_scrollbar = ttk.Scrollbar(
-            self.SU2_main_settings_frame,
-            orient="vertical",
-            command=self.su2_cfg_canvas.yview,
-        )
-        self.su2_cfg_canvas.configure(yscrollcommand=self.su2_cfg_scrollbar.set)
-
-        self.su2_cfg_canvas.grid(row=1, column=0, columnspan=2, sticky="nsew")
-        self.su2_cfg_scrollbar.grid(row=1, column=2, sticky="ns")
-
-        # Inner frame that actually holds the widgets
-        self.su2_cfg_inner = ttk.Frame(self.su2_cfg_canvas)
-
-        # --- FIXED: Store window ID ---
-        self.su2_cfg_window_id = self.su2_cfg_canvas.create_window((0, 0), window=self.su2_cfg_inner, anchor="nw")
-
-        def _on_cfg_inner_config(event):
-            self.su2_cfg_canvas.configure(scrollregion=self.su2_cfg_canvas.bbox("all"))
-
-        self.su2_cfg_inner.bind("<Configure>", _on_cfg_inner_config)
-        def _on_canvas_configure(event):
-            self.su2_cfg_canvas.itemconfig(self.su2_cfg_window_id, width=event.width)
-
-        self.su2_cfg_canvas.bind("<Configure>", _on_canvas_configure)
-        self.su2_cfg_inner.grid_columnconfigure(0, weight=1)
-
-        self.su2_settings_frame = ttk.LabelFrame(
-            self.su2_cfg_inner, text="Solver Settings", labelanchor="nw"
-        )
-        self.su2_settings_frame.grid(
-            row=0, column=0, padx=10, pady=(0, 10), sticky="nsew"
-        )
-        self.su2_settings_frame.grid_columnconfigure(1, weight=1)
-        self.su2_settings_frame.grid_columnconfigure(2, weight=1)
-        self.su2_setting_vars = {}
-
-        #Run Analysis (Bottom Spanning)
-        run_controls_frame = ttk.LabelFrame(su2_tab_setup, text="4. Run Analysis", labelanchor="n")
-        run_controls_frame.grid(row=1, column=0, padx=10, pady=(0, 10), sticky='nsew')
-        run_controls_frame.grid_columnconfigure(0, weight=1)
-
-        # Boolean Options Group
-        bool_options_frame = ttk.Frame(run_controls_frame)
-        bool_options_frame.grid(row=0, column=0, columnspan=3, padx=10, pady=5, sticky='ew')
-        bool_options_frame.grid_columnconfigure(2, weight=1)
-
-        # Live residual plotting
-        self.su2_live_plotting_var = tk.BooleanVar(value=True)
-        self.live_plot_check = ttk.Checkbutton(
-            bool_options_frame,
-            text="Enable Live Residual Plotting",
-            variable=self.su2_live_plotting_var
-        )
-        self.live_plot_check.pack(side="left", padx=(0, 15))
-
-        self.use_mpi_var = tk.BooleanVar(value=True)
-        self.use_mpi_check = ttk.Checkbutton(
-            bool_options_frame,
-            text="Use MPI parallelisation",
-            variable=self.use_mpi_var,
-            command=self._on_parallel_toggle
-        )
-        self.use_mpi_check.pack(side="left")
-
-        #Cores input
-        cores_frame = ttk.Frame(bool_options_frame)
-        cores_frame.pack(side="right")
-        ttk.Label(cores_frame, text="Number of cores:").pack(side="left", padx=(5, 5))
-        self.num_cores_var = tk.IntVar(value=8)
-        self.num_cores_entry = ttk.Entry(cores_frame, textvariable=self.num_cores_var, width=6)
-        self.num_cores_entry.pack(side="left")
-
-        # Filename input
-        polar_name_frame = ttk.Frame(run_controls_frame)
-        polar_name_frame.grid(row=1, column=0, columnspan=3, padx=10, pady=5, sticky='ew')
-        polar_name_frame.grid_columnconfigure(1, weight=1)
-        ttk.Label(polar_name_frame, text="Polar Filename:").grid(row=0, column=0, padx=(0, 5), sticky='w')
-        self.polar_filename_entry = ttk.Entry(polar_name_frame)
-        self.polar_filename_entry.insert(0, "aerodynamic_polar.csv")
-        self.polar_filename_entry.grid(row=0, column=1, sticky='ew')
-
-        #Run Buttons
-        run_stop_frame = ttk.Frame(run_controls_frame)
-        run_stop_frame.grid(row=2, column=0, columnspan=3, padx=10, pady=10, sticky='ew')
-        run_stop_frame.grid_columnconfigure(0, weight=1)
-
-        self.su2_analysis_button = ttk.Button(
-            run_stop_frame,
-            text="Run SU2 Analysis",
-            command=self.run_su2_workflow_in_thread,
-            style='Accent.TButton'
-        )
-        self.su2_analysis_button.grid(row=0, column=0, sticky='ew')
-        self.stop_button = ttk.Button(run_stop_frame, text="STOP", command=self.stop_su2_analysis)
-        self.stop_button.grid(row=0, column=1, padx=(10, 0), sticky='e')
-        self.stop_button.config(state=tk.DISABLED)
-
-        #Results Sub-Tab
-        self.res_notebook = ttk.Notebook(su2_tab_results)
-        self.res_notebook.pack(expand=True, fill='both', padx=10, pady=10)
-
-        #Tab for Polar Graphs
-        self.su2_plot_canvas_frame = ttk.Frame(self.res_notebook)
-        self.res_notebook.add(self.su2_plot_canvas_frame, text="Drag Polar")
-
-        #Tab for Visualizations (Images)
-        self.su2_visual_frame = ttk.Frame(self.res_notebook)
-        self.res_notebook.add(self.su2_visual_frame, text="Flow Visualization")
-
-        #Class variables
-        self.plotter_windows = {}
-        self.current_su2_thread = None
-        self.xfoil_thread = None
-        su2_cfd_path_env = os.environ.get('SU2_CFD_PATH')
-        mpiexec_path_env = os.environ.get('MPIEXEC_PATH')
-
-        self.su2_runner = SU2Runner(
-            su2_cfd_path=su2_cfd_path_env if su2_cfd_path_env else "SU2_CFD",
-            mpi_exec_path=mpiexec_path_env if mpiexec_path_env else "mpiexec",
-            num_procs=8,
-            use_mpi=True
-        )
-
-        # Initial GUI Update
-        self.update_su2_settings_display()
-        self.xfoil_analyze_button.config(state=tk.DISABLED)
-        self.su2_analysis_button.config(state=tk.DISABLED)
-        self.hybrid_mesh_button.config(state=tk.DISABLED)
-        self.structured_mesh_button.config(state=tk.DISABLED)
-        self._on_parallel_toggle()
-
-    def on_closing(self):
-        if self.current_su2_thread and self.current_su2_thread.is_alive():
-            self.stop_su2_analysis()
-        print("Application closing...")
-        self.root.destroy()
-
-    def _on_parallel_toggle(self):
-        """Enable/disable cores entry based on MPI usage."""
-        if self.use_mpi_var.get():
-            self.num_cores_entry.configure(state="normal")
-        else:
-            self.num_cores_entry.configure(state="disabled")
-
-    def on_su2_analysis_finish(self):
-        self.su2_analysis_button.config(state=tk.NORMAL)
-        self.stop_button.config(state=tk.DISABLED)
-
-    def stop_su2_analysis(self):
-        if self.current_su2_thread and self.current_su2_thread.is_alive():
-            print("Stop button pressed. Terminating SU2...")
-            self.su2_runner.stop()
-            messagebox.showinfo("SU2 Control", "Termination signal sent to SU2. The current analysis loop will stop.")
-        else:
-            messagebox.showwarning("SU2 Control", "No SU2 analysis is currently running.")
-
-    def create_plot_window(self, data_queue, aoa, is_unsteady):
-        plotter = LivePlotterWindow(self.root, data_queue, aoa, is_unsteady)
-        self.plotter_windows[aoa] = plotter
-        return plotter
-
-    def run_su2_workflow_in_thread(self):
-        if self.current_su2_thread and self.current_su2_thread.is_alive():
-            messagebox.showwarning("Busy", "SU2 analysis is already running.")
-            return
-
-        enable_plotting = self.su2_live_plotting_var.get()
-        try:
-            reynolds = float(self.su2_re_entry.get())
-            mach = float(self.su2_mach_entry.get())
-            alpha_min = float(self.su2_alpha_min_entry.get())
-            alpha_max = float(self.su2_alpha_max_entry.get())
-            alpha_step = float(self.su2_alpha_step_entry.get())
-        except ValueError:
-            messagebox.showerror("Input Error", "Please ensure all SU2 flow conditions are valid numbers.")
-            return
-
-        polar_filename = self.polar_filename_entry.get()
-        if not polar_filename:
-            polar_filename = "aerodynamic_polar.csv"
-
-        base_output_dir = self.int_path_entry.get()
-        flow_regime = self.flow_regime_var.get()
-        gui_settings = {key: var.get() for key, var in self.su2_setting_vars.items()}
-
-        is_inviscid = False
-        if gui_settings.get('KIND_TURB_MODEL') == 'NONE' or gui_settings.get('SOLVER') == 'EULER':
-            is_inviscid = True
-
-        conv_str, max_iter = self.conv_settings.get_config_string(is_inviscid=is_inviscid)
-        print(f"Using CONV_RESIDUAL_MINVAL = {conv_str}, ITER/EXT_ITER = {max_iter}")
-
-        gui_settings['CONV_RESIDUAL_MINVAL'] = conv_str
-        gui_settings['ITER'] = max_iter
-        gui_settings['EXT_ITER'] = max_iter
-
-        mesh_filepath = os.path.join(os.getcwd(), "airfoil.su2")
-        if not os.path.exists(mesh_filepath):
-            messagebox.showerror("Error", f"Mesh file not found at {mesh_filepath}. Please generate the mesh first.")
-            return
-
-        self.su2_analysis_button.config(state=tk.DISABLED)
-        self.stop_button.config(state=tk.NORMAL)
-
-        def workflow_wrapper():
-            use_mpi = self.use_mpi_var.get()
-            try:
-                num_cores = int(self.num_cores_var.get())
-            except Exception:
-                num_cores = 1
-
-            self.su2_runner.update_parallel_settings(use_mpi=use_mpi, num_procs=num_cores)
-
-            execute_su2_analysis_workflow(
-                su2_runner=self.su2_runner,
-                reynolds=reynolds,
-                mach=mach,
-                alpha_min=alpha_min,
-                alpha_max=alpha_max,
-                alpha_step=alpha_step,
-                base_output_dir=base_output_dir,
-                flow_regime=flow_regime,
-                gui_settings=gui_settings,
-                mesh_filepath=mesh_filepath,
-                gui_update_callback=lambda results: self.root.after(0, self.plot_su2_results, results),
-                polar_filename=polar_filename,
-                enable_live_plotting=enable_plotting,
-                plot_window_callback=lambda q, a, is_unsteady: self.create_plot_window(q, a, is_unsteady)
-            )
-            self.root.after(0, self.on_su2_analysis_finish)
-
-        self.current_su2_thread = threading.Thread(target=workflow_wrapper)
-        self.current_su2_thread.daemon = True
-        self.current_su2_thread.start()
-
-    def analyze(self):
-        if not hasattr(self, 'foil1') or not hasattr(self, 'foil2'):
-            messagebox.showerror("Error", "Airfoil not selected or parameterized.")
-            return
-        for widget in self.result_frame.winfo_children():
-            widget.destroy()
-        self.method_label = ttk.Label(self.result_frame, text="")
-        self.method_label.grid(row=0, column=0, columnspan=2, padx=10, pady=5, sticky='w')
-        self.parsec_error_label = ttk.Label(self.result_frame, text="")
-        self.parsec_error_label.grid(row=1, column=0, columnspan=2, padx=10, pady=2, sticky='w')
-        self.cst_error_label = ttk.Label(self.result_frame, text="")
-        self.cst_error_label.grid(row=2, column=0, columnspan=2, padx=10, pady=2, sticky='w')
-        self.output_path_label = ttk.Label(self.result_frame, text="")
-        self.output_path_label.grid(row=3, column=0, columnspan=2, padx=10, pady=5, sticky='w')
-        self.parsec_error_label.config(text=f"PARSEC Error (RMSE): {self.parsec_error:.6f}")
-        self.cst_error_label.config(text=f"CST Error (RMSE): {self.cst_error:.6f}")
-        self.method_label.config(text=f"More Accurate Method: {self.meth}")
-        n_points = int(self.n_points_entry.get())
-        int_path = self.int_path_entry.get()
-        os.makedirs(int_path, exist_ok=True)
-        selected_airfoil_name = os.path.basename(self.selected_airfoil_path)
-        i = Interpolate(self.directory, self.selected_airfoil_path)
-        if self.meth == 'PARSEC':
-            i.airfoil_interpolate(n_points, self.meth, self.foil1, self.directory, selected_airfoil_name, int_path)
-        else:
-            i.airfoil_interpolate(n_points, self.meth, self.foil2, self.directory, selected_airfoil_name, int_path)
-        self.upper_surface, self.lower_surface = i.get_surface()
-        output_file_path = os.path.join(int_path, "output.dat")
-        self.output_path_label.config(text=f"Interpolated airfoil saved to:\n{output_file_path}")
-        try:
-            print("Repaneling: Reading newly generated interpolated airfoil 'output.dat'.")
-            new_x, new_y = read_airfoil.read_airfoil_coordinates(int_path, output_file_path)
-            self.xcoords = new_x
-            self.ycoords = new_y
-            print("Internal airfoil coordinates have been updated to the new interpolated profile.")
-            messagebox.showinfo(
-                "Repanel Complete",
-                "The internal airfoil coordinates have been updated.\n\nMeshing will now use this new profile."
-            )
-        except Exception as e:
-            messagebox.showerror(
-                "Repanel Error",
-                f"Could not read the newly generated airfoil file 'output.dat'.\n\n{e}"
-            )
-            return
-        print(f"Analyze complete. Interpolated file 'output.dat' created.")
-        self.xfoil_analyze_button.config(state=tk.NORMAL)
-        self.hybrid_mesh_button.config(state=tk.NORMAL)
-
-    def open_dir(self, entry_widget):
-        directory = filedialog.askdirectory()
-        if directory:
-            entry_widget.delete(0, tk.END)
-            entry_widget.insert(0, directory)
-
-    def open_file(self, entry_widget):
-        file_path = filedialog.askopenfilename(filetypes=[("Executable Files", "*.exe"), ("All files", "*.*")])
-        if file_path:
-            entry_widget.delete(0, tk.END)
-            entry_widget.insert(0, file_path)
-
-    def on_airfoil_change(self, event):
-        selected_index = self.listbox.curselection()
-        if not selected_index:
-            return
-        for widget in self.canvas_result_frame.winfo_children():
-            widget.destroy()
-        for widget in self.result_frame.winfo_children():
-            widget.destroy()
-        self.xfoil_analyze_button.config(state=tk.DISABLED)
-        self.su2_analysis_button.config(state=tk.DISABLED)
-        self.hybrid_mesh_button.config(state=tk.DISABLED)
-        self.structured_mesh_button.config(state=tk.DISABLED)
-        self.stop_button.config(state=tk.DISABLED)
-        selected_airfoil = self.listbox.get(selected_index)
+    def _update_airfoil_listbox(self):
+        term = self.airfoil_search_var.text().lower()
+        self.listbox.clear()
+        for name in self.all_airfoils:
+            if term in name.lower():
+                self.listbox.addItem(name)
+
+    def on_airfoil_change(self):
+        items = self.listbox.selectedItems()
+        if not items: return
+
+        self.xfoil_analyze_button.setEnabled(False)
+        self.su2_analysis_button.setEnabled(False)
+        self.hybrid_mesh_button.setEnabled(False)
+        self.structured_mesh_button.setEnabled(False)
+
+        selected_airfoil = items[0].text()
         self.selected_airfoil_path = os.path.join(self.directory, selected_airfoil)
         print(f'Selected Airfoil: {selected_airfoil}')
+
         self.take_input_and_parameterize()
-        self.structured_mesh_button.config(state=tk.NORMAL)
-        self.analyze_button.config(state=tk.NORMAL)
+        self.structured_mesh_button.setEnabled(True)
+        self.analyze_button.setEnabled(True)
 
-    def _update_airfoil_listbox(self, *args):
-        """Filter and refresh airfoil listbox based on search text."""
-        if not hasattr(self, "all_airfoils"):
-            self.all_airfoils = []
-
-        search_text = self.airfoil_search_var.get().lower() if hasattr(self, "airfoil_search_var") else ""
-
-        self.listbox.delete(0, tk.END)
-        for name in self.all_airfoils:
-            if search_text in name.lower():
-                self.listbox.insert(tk.END, name)
-
-    def mesh(self):
-        if not hasattr(self, 'xcoords') or not hasattr(self, 'ycoords'):
-            messagebox.showerror("Error", "Airfoil coordinates not loaded. Please select an airfoil first.")
-            return
+    def take_input_and_parameterize(self):
         try:
-            current_re = float(self.su2_re_entry.get())
-            current_m = float(self.su2_mach_entry.get())
-            current_yplus = float(self.yplus_entry.get())
+            self.xcoords, self.ycoords = read_airfoil.read_airfoil_coordinates(self.directory,
+                                                                               self.selected_airfoil_path)
+            if self.xcoords.size == 0: raise ValueError("Empty coordinates")
 
-            if self.show_gmsh_var.get():
-                args_tuple = (self.xcoords, self.ycoords, current_re, current_m)
-                kwargs_dict = {'y_plus': current_yplus, 'show_graphics': True, 'hide_output': False}
-                p = multiprocessing.Process(target=generate_mesh, args=args_tuple, kwargs=kwargs_dict)
-                p.start()
-                messagebox.showinfo(
-                    "Success",
-                    "Gmsh window launched in a separate process.\n"
-                    "The airfoil.su2 file will be generated when you close Gmsh."
-                )
-            else:
-                generate_mesh(
-                    self.xcoords,
-                    self.ycoords,
-                    current_re,
-                    current_m,
-                    y_plus=current_yplus,
-                    show_graphics=False,
-                    hide_output=False
-                )
-                messagebox.showinfo("Success", "Mesh generation complete. 'airfoil.su2' created.")
+            p = Parsec(self.directory, self.selected_airfoil_path)
+            c = CST(self.directory, self.selected_airfoil_path)
+            self.foil1 = p.foil()
+            self.foil2 = c.foil()
+            self.meth, self.parsec_error, self.cst_error = error(self.foil1, self.foil2, self.ycoords)
 
-            self.su2_analysis_button.config(state=tk.NORMAL)
-        except ValueError:
-            messagebox.showerror("Input Error", "Please ensure Reynolds, Mach, and y+ are valid numbers.")
+            self.tab1_figure.clear()
+            ax1 = self.tab1_figure.add_subplot(211)
+            ax1.set_facecolor('#2b2b2b')
+            ax1.tick_params(colors='#f8f8f2')
+            ax1.xaxis.label.set_color('#f8f8f2')
+            ax1.yaxis.label.set_color('#f8f8f2')
+            ax1.title.set_color('#f8f8f2')
+            for spine in ax1.spines.values():
+                spine.set_edgecolor('#555555')
+            ax1.plot(self.xcoords, self.foil1, color='#ff6b6b', linewidth=1.5, label='PARSEC fit')
+            ax1.plot(self.xcoords, self.ycoords, color='#00d4ff', linewidth=1.0, linestyle='--', label='Actual', zorder=5)
+            ax1.legend(facecolor='#3a3a3a', labelcolor='#f8f8f2')
+            ax1.grid(True, color='#555555')
+            ax1.set_title('PARSEC')
+
+            ax2 = self.tab1_figure.add_subplot(212)
+            ax2.set_facecolor('#2b2b2b')
+            ax2.tick_params(colors='#f8f8f2')
+            ax2.xaxis.label.set_color('#f8f8f2')
+            ax2.yaxis.label.set_color('#f8f8f2')
+            ax2.title.set_color('#f8f8f2')
+            for spine in ax2.spines.values():
+                spine.set_edgecolor('#555555')
+            ax2.plot(self.xcoords, self.foil2, color='#ff6b6b', linewidth=1.5, label='CST fit')
+            ax2.plot(self.xcoords, self.ycoords, color='#00d4ff', linewidth=1.0, linestyle='--', label='Actual', zorder=5)
+            ax2.legend(facecolor='#3a3a3a', labelcolor='#f8f8f2')
+            ax2.grid(True, color='#555555')
+            ax2.set_title('CST')
+
+            self.tab1_figure.tight_layout()
+            self.tab1_canvas.draw()
+
         except Exception as e:
-            messagebox.showerror("Meshing Error", f"An error occurred during mesh generation:\n\n{e}")
+            QMessageBox.critical(self, "Error", f"Error parameterizing airfoil: {e}")
 
-    def hybrid(self):
-        if not hasattr(self, 'upper_surface') or not hasattr(self, 'lower_surface'):
-            messagebox.showerror("Error", "Airfoil surfaces not generated. Please run 'Analyze' first.")
-            return
+    def analyze(self):
+        if not hasattr(self, 'foil1'): return
+
+        self.method_label.setText(f"More Accurate Method: {self.meth}")
+        self.parsec_error_label.setText(f"PARSEC Error: {self.parsec_error:.6f}")
+        self.cst_error_label.setText(f"CST Error: {self.cst_error:.6f}")
+
         try:
-            current_re = float(self.su2_re_entry.get())
-            current_m = float(self.su2_mach_entry.get())
-            current_yplus = float(self.yplus_entry.get())
+            n_points = int(self.n_points_entry.text())
+            int_path = self.int_path_entry.text()
+            os.makedirs(int_path, exist_ok=True)
 
-            if self.show_gmsh_var.get():
-                args_tuple = (self.upper_surface, self.lower_surface, current_re, current_m)
-                kwargs_dict = {'y_plus': current_yplus, 'show_graphics': True, 'hide_output': False}
-                p = multiprocessing.Process(target=generate_hybrid, args=args_tuple, kwargs=kwargs_dict)
-                p.start()
-                messagebox.showinfo(
-                    "Success",
-                    "Gmsh window launched in a separate process.\n"
-                    "The airfoil.su2 file will be generated when you close Gmsh."
-                )
-            else:
-                generate_hybrid(
-                    self.upper_surface,
-                    self.lower_surface,
-                    current_re,
-                    current_m,
-                    y_plus=current_yplus,
-                    show_graphics=False,
-                    hide_output=False
-                )
-                messagebox.showinfo("Success", "Hybrid mesh generation complete. 'airfoil.su2' created.")
+            i = Interpolate(self.directory, self.selected_airfoil_path)
+            target = self.foil1 if self.meth == 'PARSEC' else self.foil2
 
-            self.su2_analysis_button.config(state=tk.NORMAL)
-        except ValueError:
-            messagebox.showerror("Input Error", "Please ensure Reynolds, Mach, and y+ are valid numbers.")
+            i.airfoil_interpolate(n_points, self.meth, target, self.directory,
+                                  os.path.basename(self.selected_airfoil_path), int_path)
+
+            self.upper_surface, self.lower_surface = i.get_surface()
+            output_file = os.path.join(int_path, "output.dat")
+            self.output_path_label.setText(f"Saved to:\n{output_file}")
+
+            new_x, new_y = read_airfoil.read_airfoil_coordinates(int_path, output_file)
+            self.xcoords, self.ycoords = new_x, new_y
+            print("[DEBUG] Internal coordinates updated from interpolated airfoil")
+            print(f"[DEBUG] Total points: {len(self.xcoords)}")
+
+            QMessageBox.information(self, "Success", "Interpolation & Repaneling Complete.")
+            self.xfoil_analyze_button.setEnabled(True)
+            self.hybrid_mesh_button.setEnabled(True)
+
         except Exception as e:
-            messagebox.showerror("Meshing Error", f"An error occurred during hybrid mesh generation:\n\n{e}")
+            QMessageBox.critical(self, "Error", str(e))
 
-    def _on_conv_method_category_change(self, event=None):
-        settings_dict = (
-            SU2_INCOMPRESSIBLE_SETTINGS
-            if self.flow_regime_var.get() == "Incompressible"
-            else SU2_COMPRESSIBLE_SETTINGS
-        )
-        category = self.conv_category_var.get()
-        new_schemes = settings_dict['CONV_NUM_METHOD_FLOW'][category]
-        self.conv_scheme_combo['values'] = new_schemes
-        self.su2_setting_vars['CONV_NUM_METHOD_FLOW'].set(new_schemes[0])
+    def init_tab2(self):
+        self.tab2 = QWidget()
+        self.tabs.addTab(self.tab2, "XFOIL Analysis")
+        layout = QGridLayout(self.tab2)
 
-    def update_su2_settings_display(self, event=None):
-        for widget in self.su2_settings_frame.winfo_children():
-            widget.destroy()
-        self.su2_setting_vars = {}
-        selected_regime = self.flow_regime_var.get()
-        settings_to_display = (
-            SU2_INCOMPRESSIBLE_SETTINGS
-            if selected_regime == "Incompressible"
-            else SU2_COMPRESSIBLE_SETTINGS
-        )
-        row_idx = 0
+        input_group = QGroupBox("Input Parameters")
+        form = QFormLayout(input_group)
 
-        self.su2_settings_frame.grid_columnconfigure(1, weight=1)
-        self.su2_settings_frame.grid_columnconfigure(2, weight=1)
+        self.xfoil_path_entry = QLineEdit("xfoil.exe")
+        browse_xf = QPushButton("...")
+        browse_xf.clicked.connect(lambda: self.open_file(self.xfoil_path_entry))
+        h_xf = QHBoxLayout()
+        h_xf.addWidget(self.xfoil_path_entry)
+        h_xf.addWidget(browse_xf)
+        form.addRow("XFOIL Executable:", h_xf)
 
-        for key, options in settings_to_display.items():
-            if key in ['ITER', 'EXT_ITER', 'CONV_RESIDUAL_MINVAL']:
-                continue
+        self.re_entry = QLineEdit("1000000")
+        self.mach_entry = QLineEdit("0.0")
+        self.alpha_min_entry = QLineEdit("0.0")
+        self.alpha_max_entry = QLineEdit("5.0")
+        self.alpha_step_entry = QLineEdit("1.0")
 
-            ttk.Label(self.su2_settings_frame, text=f"{key}:").grid(
-                row=row_idx, column=0, padx=(10, 5), pady=5, sticky='w'
-            )
+        form.addRow("Reynolds Number:", self.re_entry)
+        form.addRow("Mach Number:", self.mach_entry)
+        form.addRow("Min Alpha:", self.alpha_min_entry)
+        form.addRow("Max Alpha:", self.alpha_max_entry)
+        form.addRow("Step:", self.alpha_step_entry)
 
-            if key == 'CONV_NUM_METHOD_FLOW' and isinstance(options, dict):
-                self.conv_category_var = tk.StringVar(value=list(options.keys())[0])
-                category_combo = ttk.Combobox(
-                    self.su2_settings_frame,
-                    textvariable=self.conv_category_var,
-                    values=list(options.keys()),
-                    state="readonly"
+        self.xfoil_analyze_button = QPushButton("Analyze with XFOIL")
+        self.xfoil_analyze_button.setStyleSheet("font-weight: bold; padding: 5px;")
+        self.xfoil_analyze_button.clicked.connect(self.xfoil_analyze_threaded)
+        self.xfoil_analyze_button.setEnabled(False)
+        form.addRow(self.xfoil_analyze_button)
+        self.xfoil_stop_button = QPushButton("STOP XFOIL")
+        self.xfoil_stop_button.setEnabled(False)
+        self.xfoil_stop_button.clicked.connect(xfoil1.stop_xfoil)
+        form.addRow(self.xfoil_stop_button)
+
+        layout.addWidget(input_group, 0, 0)
+
+        plot_group = QGroupBox("Polar Plot")
+        plot_layout = QVBoxLayout(plot_group)
+        self.xfoil_figure = Figure(figsize=(5, 4), facecolor='#1e1e1e')
+        self.xfoil_canvas = FigureCanvasQTAgg(self.xfoil_figure)
+        self.xfoil_canvas.setStyleSheet("background-color: #1e1e1e;")
+        plot_layout.addWidget(self.xfoil_canvas)
+        layout.addWidget(plot_group, 0, 1)
+        layout.setColumnStretch(1, 1)
+
+    def xfoil_analyze_threaded(self):
+        self.xfoil_analyze_button.setEnabled(False)
+        self.xfoil_stop_button.setEnabled(True)
+
+        params = {
+            'xfoil_path': self.xfoil_path_entry.text(),
+            'int_path': self.int_path_entry.text(),
+            'airfoil_full_path': os.path.join(self.int_path_entry.text(), "output.dat"),
+            'Re': float(self.re_entry.text()),
+            'M': float(self.mach_entry.text()),
+            'alpha_min': float(self.alpha_min_entry.text()),
+            'alpha_max': float(self.alpha_max_entry.text()),
+            'alpha_step': float(self.alpha_step_entry.text())
+        }
+
+        def worker():
+            try:
+                pol, cp_files = xfoil1.run_xfoil_logic(**params)
+                self.xfoil_finished_signal.emit(pol, cp_files, params['Re'], params['int_path'])
+            except Exception as e:
+                print(f"XFOIL Error: {e}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_xfoil_results(self, polar_data, cp_data, Re, int_path):
+        self.xfoil_analyze_button.setEnabled(True)
+        self.xfoil_figure.clear()
+
+        ax1 = self.xfoil_figure.add_subplot(211)
+        ax1.set_facecolor('#2b2b2b')
+        ax1.tick_params(colors='#f8f8f2')
+        ax1.xaxis.label.set_color('#f8f8f2')
+        ax1.yaxis.label.set_color('#f8f8f2')
+        ax1.title.set_color('#f8f8f2')
+        for spine in ax1.spines.values():
+            spine.set_edgecolor('#555555')
+        if polar_data:
+            try:
+                pd = np.array(polar_data)
+                ax1.plot(pd[:, 2], pd[:, 1], 'o-', label=f'Re={Re}')
+                ax1.set_xlabel("Cd")
+                ax1.set_ylabel("Cl")
+                ax1.set_title(f"Polar Plot (Re={Re})")
+                ax1.grid(True, color='#555555')
+                ax1.legend(facecolor='#3a3a3a', labelcolor='#f8f8f2')
+            except Exception as e:
+                print(f"Polar Plotting Error: {e}")
+        else:
+            ax1.text(0.5, 0.5, "Convergence Failed", ha='center', color='#ff5555')
+
+        ax2 = self.xfoil_figure.add_subplot(212)
+        ax2.set_facecolor('#2b2b2b')
+        ax2.tick_params(colors='#f8f8f2')
+        ax2.xaxis.label.set_color('#f8f8f2')
+        ax2.yaxis.label.set_color('#f8f8f2')
+        ax2.title.set_color('#f8f8f2')
+        for spine in ax2.spines.values():
+            spine.set_edgecolor('#555555')
+
+        try:
+            try:
+                cmap = matplotlib.colormaps['jet']
+            except AttributeError:
+                cmap = cm.get_cmap('jet')
+
+            lines_plotted = 0
+
+            if isinstance(cp_data, dict):
+                sorted_alphas = sorted(cp_data.keys())
+                for i, alpha in enumerate(sorted_alphas):
+                    x, cp = cp_data[alpha]
+                    color = cmap(i / max(1, len(sorted_alphas) - 1))
+                    ax2.plot(x, cp, linewidth=1, color=color, label=f"a={alpha:.1f}")
+                    lines_plotted += 1
+
+            elif isinstance(cp_data, list):
+                for i, item in enumerate(cp_data):
+                    if len(item) == 2:
+                        alpha, fname = item
+                    else:
+                        continue
+
+                    full_path = os.path.join(int_path, fname)
+                    if os.path.exists(full_path):
+                        try:
+                            data = np.loadtxt(full_path, skiprows=3)
+                            color = cmap(i / max(1, len(cp_data) - 1))
+                            ax2.plot(data[:, 0], data[:, 2], linewidth=1, color=color, label=f"a={alpha:.1f}")
+                            lines_plotted += 1
+                        except Exception as read_err:
+                            print(f"Could not read {fname}: {read_err}")
+
+            if lines_plotted > 0:
+                ax2.invert_yaxis()
+                ax2.set_xlabel("x/c")
+                ax2.set_ylabel("Cp")
+                ax2.set_title("Pressure Coefficients")
+                ax2.grid(True, color='#555555')
+                if lines_plotted <= 10:
+                    ax2.legend(fontsize='x-small', ncol=2, facecolor='#3a3a3a', labelcolor='#f8f8f2')
+            else:
+                ax2.text(0.5, 0.5, "No Cp Data Available", ha='center', color='#f8f8f2')
+
+        except Exception as e:
+            print(f"Cp Plotting Error: {e}")
+            ax2.text(0.5, 0.5, f"Plot Error: {e}", ha='center')
+
+        self.xfoil_figure.tight_layout()
+        self.xfoil_canvas.draw()
+        QMessageBox.information(self, "XFOIL", "Analysis Complete.")
+
+    def init_tab3(self):
+        self.tab3 = QWidget()
+        self.tabs.addTab(self.tab3, "SU2 Analysis")
+        layout = QVBoxLayout(self.tab3)
+
+        self.su2_tabs = QTabWidget()
+        layout.addWidget(self.su2_tabs)
+
+        t_mesh = QWidget()
+        self.su2_tabs.addTab(t_mesh, "Meshing && Conditions")
+        mesh_layout = QGridLayout(t_mesh)
+
+        g_mesh = QGroupBox("1. Mesh Generation")
+        gm_layout = QVBoxLayout(g_mesh)
+        self.structured_mesh_button = QPushButton("Generate Structured Mesh")
+        self.hybrid_mesh_button = QPushButton("Generate Hybrid Mesh")
+        self.structured_mesh_button.clicked.connect(self.mesh)
+        self.hybrid_mesh_button.clicked.connect(self.hybrid)
+        self.structured_mesh_button.setEnabled(False)
+        self.hybrid_mesh_button.setEnabled(False)
+
+        h_yp = QHBoxLayout()
+        self.yplus_entry = QLineEdit("1.0")
+        h_yp.addWidget(QLabel("Target y+:"));
+        h_yp.addWidget(self.yplus_entry)
+
+        self.show_gmsh_check = QCheckBox("Show Interactive Gmsh Window")
+
+        gm_layout.addWidget(self.structured_mesh_button)
+        gm_layout.addWidget(self.hybrid_mesh_button)
+        gm_layout.addLayout(h_yp)
+        gm_layout.addWidget(self.show_gmsh_check)
+
+        g_flow = QGroupBox("2. Flow Conditions")
+        gf_layout = QFormLayout(g_flow)
+
+        self.su2_re_entry = QLineEdit("1000000")
+        self.su2_mach_entry = QLineEdit("0.15")
+        self.su2_alpha_min_entry = QLineEdit("0.0")
+        self.su2_alpha_max_entry = QLineEdit("5.0")
+        self.su2_alpha_step_entry = QLineEdit("1.0")
+
+        gf_layout.addRow("Reynolds:", self.su2_re_entry)
+        gf_layout.addRow("Mach:", self.su2_mach_entry)
+        gf_layout.addRow("Min AoA:", self.su2_alpha_min_entry)
+        gf_layout.addRow("Max AoA:", self.su2_alpha_max_entry)
+        gf_layout.addRow("Step:", self.su2_alpha_step_entry)
+
+        load_btn = QPushButton("Load Recommended Settings")
+        load_btn.clicked.connect(self.load_recommended_settings)
+        gf_layout.addRow(load_btn)
+
+        mesh_layout.addWidget(g_mesh, 0, 0)
+        mesh_layout.addWidget(g_flow, 0, 1)
+
+        t_setup = QWidget()
+        self.su2_tabs.addTab(t_setup, "Solver Setup && Run")
+        setup_layout = QVBoxLayout(t_setup)
+
+        g_cfg = QGroupBox("3. SU2 Configuration")
+        cfg_layout = QVBoxLayout(g_cfg)
+
+        h_regime = QHBoxLayout()
+        h_regime.addWidget(QLabel("Flow Type:"))
+        self.flow_regime_combo = QComboBox()
+        self.flow_regime_combo.addItems(["Compressible", "Incompressible"])
+        self.flow_regime_combo.currentIndexChanged.connect(self.update_su2_settings_display)
+        h_regime.addWidget(self.flow_regime_combo)
+        h_regime.addStretch()
+        cfg_layout.addLayout(h_regime)
+
+        self.settings_scroll = QScrollArea()
+        self.settings_scroll.setWidgetResizable(True)
+        self.settings_content = QWidget()
+        self.settings_form = QFormLayout(self.settings_content)
+        self.settings_scroll.setWidget(self.settings_content)
+        cfg_layout.addWidget(self.settings_scroll)
+
+        setup_layout.addWidget(g_cfg, stretch=2)
+
+        g_run = QGroupBox("4. Run Analysis")
+        run_layout = QVBoxLayout(g_run)
+
+        h_opts = QHBoxLayout()
+        self.live_plot_check = QCheckBox("Live Plotting")
+        self.live_plot_check.setChecked(True)
+        self.use_mpi_check = QCheckBox("Use MPI")
+        self.use_mpi_check.setChecked(True)
+        self.use_mpi_check.toggled.connect(self._on_parallel_toggle)
+
+        self.num_cores_entry = QLineEdit("8")
+        self.num_cores_entry.setFixedWidth(50)
+
+        h_opts.addWidget(self.live_plot_check)
+        h_opts.addWidget(self.use_mpi_check)
+        h_opts.addWidget(QLabel("Cores:"))
+        h_opts.addWidget(self.num_cores_entry)
+        run_layout.addLayout(h_opts)
+
+        h_pol = QHBoxLayout()
+        self.polar_filename_entry = QLineEdit("aerodynamic_polar.csv")
+        h_pol.addWidget(QLabel("Polar Filename:"));
+        h_pol.addWidget(self.polar_filename_entry)
+        run_layout.addLayout(h_pol)
+
+        h_btns = QHBoxLayout()
+        self.su2_analysis_button = QPushButton("Run SU2 Analysis")
+        self.su2_analysis_button.setStyleSheet("background-color: #28a745; color: white; font-weight: bold;")
+        self.su2_analysis_button.clicked.connect(self.run_su2_workflow_in_thread)
+        self.su2_analysis_button.setEnabled(False)
+
+        self.stop_button = QPushButton("STOP")
+        self.stop_button.clicked.connect(self.stop_su2_analysis)
+        self.stop_button.setEnabled(False)
+
+        h_btns.addWidget(self.su2_analysis_button)
+        h_btns.addWidget(self.stop_button)
+        run_layout.addLayout(h_btns)
+
+        setup_layout.addWidget(g_run)
+
+        self.update_su2_settings_display()
+
+        t_res = QWidget()
+        self.su2_tabs.addTab(t_res, "Results")
+        res_layout = QVBoxLayout(t_res)
+
+        self.res_subtabs = QTabWidget()
+
+        self.su2_polar_canv = FigureCanvasQTAgg(Figure(facecolor='#1e1e1e'))
+        self.su2_polar_canv.setStyleSheet("background-color: #1e1e1e;")
+        self.su2_polar_tool = NavigationToolbar2QT(self.su2_polar_canv, t_res)
+        w_pol = QWidget()
+        l_pol = QVBoxLayout(w_pol)
+        l_pol.addWidget(self.su2_polar_tool);
+        l_pol.addWidget(self.su2_polar_canv)
+        self.res_subtabs.addTab(w_pol, "Drag Polar")
+
+        self.visual_scroll = QScrollArea()
+        self.visual_scroll.setWidgetResizable(True)
+        self.visual_content = QWidget()
+        self.visual_layout = QVBoxLayout(self.visual_content)
+        self.visual_scroll.setWidget(self.visual_content)
+        self.res_subtabs.addTab(self.visual_scroll, "Flow Visualization")
+
+        res_layout.addWidget(self.res_subtabs)
+
+    def update_su2_settings_display(self):
+        while self.settings_form.count():
+            child = self.settings_form.takeAt(0)
+            if child.widget(): child.widget().deleteLater()
+
+        self.su2_setting_widgets = {}
+        regime = self.flow_regime_combo.currentText()
+        settings = SU2_INCOMPRESSIBLE_SETTINGS if regime == "Incompressible" else SU2_COMPRESSIBLE_SETTINGS
+
+        for key, options in settings.items():
+            if key in ['ITER', 'EXT_ITER', 'CONV_RESIDUAL_MINVAL']: continue
+
+            if isinstance(options, list):
+                combo = QComboBox()
+                combo.addItems(options)
+                self.settings_form.addRow(f"{key}:", combo)
+                self.su2_setting_widgets[key] = combo
+                if key in ['KIND_TURB_MODEL', 'SOLVER']:
+                    combo.currentIndexChanged.connect(self.check_turbulence_status)
+            elif isinstance(options, dict) and key == 'CONV_NUM_METHOD_FLOW':
+                self.conv_category_combo = QComboBox()
+                self.conv_category_combo.addItems(options.keys())
+                self.conv_category_combo.currentTextChanged.connect(
+                    self._on_conv_method_category_change
                 )
-                category_combo.grid(row=row_idx, column=1, padx=5, pady=5, sticky='ew')
-                category_combo.bind("<<ComboboxSelected>>", self._on_conv_method_category_change)
+                self.settings_form.addRow("CONV_SCHEME_CATEGORY:", self.conv_category_combo)
 
-                initial_category = self.conv_category_var.get()
-                initial_schemes = options[initial_category]
-                scheme_var = tk.StringVar(value=initial_schemes[0])
-                self.conv_scheme_combo = ttk.Combobox(
-                    self.su2_settings_frame,
-                    textvariable=scheme_var,
-                    values=initial_schemes,
-                    state="readonly"
-                )
-                self.conv_scheme_combo.grid(row=row_idx, column=2, padx=(0, 10), pady=5, sticky='ew')
-                self.su2_setting_vars[key] = scheme_var
-            elif isinstance(options, list):
-                var = tk.StringVar(value=options[0])
-                combo = ttk.Combobox(
-                    self.su2_settings_frame,
-                    textvariable=var,
-                    values=options,
-                    state="readonly"
-                )
-                combo.grid(row=row_idx, column=1, padx=5, pady=5, sticky='ew', columnspan=2)
-                self.su2_setting_vars[key] = var
+                self.conv_scheme_combo = QComboBox()
+                self.settings_form.addRow("CONV_NUM_METHOD_FLOW:", self.conv_scheme_combo)
 
-                if key == 'KIND_TURB_MODEL' or key == 'SOLVER':
-                    combo.bind("<<ComboboxSelected>>", self.check_turbulence_status)
+                self.su2_setting_widgets['CONV_NUM_METHOD_FLOW'] = self.conv_scheme_combo
 
-            row_idx += 1
+                self._on_conv_method_category_change()
 
-        ttk.Label(self.su2_settings_frame, text="CFL Number:").grid(
-            row=row_idx, column=0, padx=(10, 5), pady=5, sticky='w'
-        )
-        self.su2_setting_vars['CFL_NUMBER'] = tk.DoubleVar(value=1.0)
-        ttk.Entry(
-            self.su2_settings_frame,
-            textvariable=self.su2_setting_vars['CFL_NUMBER']
-        ).grid(row=row_idx, column=1, padx=5, pady=5, sticky='ew', columnspan=2)
-        row_idx += 1
+        self.cfl_input = QLineEdit("1.0")
+        self.settings_form.addRow("CFL_NUMBER:", self.cfl_input)
+        self.su2_setting_widgets['CFL_NUMBER'] = self.cfl_input
 
-        ttk.Label(self.su2_settings_frame, text="Convergence Field:").grid(
-            row=row_idx, column=0, padx=(10, 5), pady=5, sticky='w'
-        )
-        conv_field_options = [
-            "RMS_DENSITY", "RMS_PRESSURE", "RMS_MOMENTUM-X",
-            "RMS_ENERGY", "LIFT", "DRAG", "RESIDUAL"
-        ]
-        self.su2_setting_vars['CONV_FIELD'] = tk.StringVar(value="RMS_DENSITY")
-        conv_combo = ttk.Combobox(
-            self.su2_settings_frame,
-            textvariable=self.su2_setting_vars['CONV_FIELD'],
-            values=conv_field_options,
-            state="readonly"
-        )
-        conv_combo.grid(row=row_idx, column=1, padx=5, pady=5, sticky='ew', columnspan=2)
-        row_idx += 1
-        self.conv_settings = ConvergenceSettings(self.su2_settings_frame, start_row=row_idx)
+        self.conv_field = QComboBox()
+
+        if self.flow_regime_combo.currentText() == "Incompressible":
+            self.conv_field.addItems([
+                "RMS_PRESSURE"
+            ])
+        else:
+            self.conv_field.addItems([
+                "RMS_DENSITY",
+                "REL_RMS_DENSITY",
+                "RMS_ENERGY"
+            ])
+
+        self.settings_form.addRow("CONV_FIELD:", self.conv_field)
+        self.su2_setting_widgets['CONV_FIELD'] = self.conv_field
+
+        self.conv_settings = ConvergenceSettings()
+        self.settings_form.addRow(self.conv_settings)
 
         self.check_turbulence_status()
 
-    def parse_su2_cfg(self, file_path):
-        """Parses a .cfg file and returns a dictionary of settings."""
-        settings = {}
-        if not os.path.exists(file_path):
-            messagebox.showerror(
-                "Error",
-                f"Config file not found: {file_path}\n\nPlease ensure this file is in the same directory as the script."
-            )
-            return None
+    def _on_conv_method_category_change(self):
+        category = self.conv_category_combo.currentText()
 
-        try:
-            with open(file_path, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('%'):
-                        continue  
+        settings = (
+            SU2_INCOMPRESSIBLE_SETTINGS
+            if self.flow_regime_combo.currentText() == "Incompressible"
+            else SU2_COMPRESSIBLE_SETTINGS
+        )
 
-                    m = re.match(r'^\s*([A-Za-z0-9_]+)\s*=\s*(.*)', line)
-                    if m:
-                        key = m.group(1).strip().upper()
-                        value = m.group(2).strip()
-                        value = value.split('%')[0].strip()
-                        settings[key] = value
-        except Exception as e:
-            messagebox.showerror("Parse Error", f"Error reading {file_path}:\n{e}")
-            return None
+        schemes = settings['CONV_NUM_METHOD_FLOW'].get(category, [])
 
-        print(f"Parsed {len(settings)} settings from {file_path}.")
-        return settings
+        self.conv_scheme_combo.blockSignals(True)
+        self.conv_scheme_combo.clear()
+        self.conv_scheme_combo.addItems(schemes)
+        self.conv_scheme_combo.blockSignals(False)
+
+    def check_turbulence_status(self):
+        pass
 
     def load_recommended_settings(self):
-        """
-        Pick a preset .cfg based on Mach & Re,
-        parse it, and apply the solver settings to the GUI.
-        """
         try:
-            mach = float(self.su2_mach_entry.get())
-            reynolds = float(self.su2_re_entry.get())
+            mach = float(self.su2_mach_entry.text())
+            reynolds = float(self.su2_re_entry.text())
         except ValueError:
-            messagebox.showerror("Input Error", "Please enter valid numbers for Mach and Reynolds.")
+            QMessageBox.warning(
+                self,
+                "Input Error",
+                "Please enter valid Mach and Reynolds numbers."
+            )
             return
 
         selected_file = ""
         new_regime = ""
 
-        if mach > 1.0:
+        if mach >= 1.0:
             selected_file = "supersonic.cfg"
             new_regime = "Compressible"
-        elif 0.7 <= mach <= 1.0:
+        elif 0.7 <= mach < 1.0:
             selected_file = "Transonic.cfg"
             new_regime = "Compressible"
-        else:  
+        else:
             new_regime = "Incompressible"
             if reynolds >= 1e6:
                 selected_file = "HighReIncomp.cfg"
             else:
                 selected_file = "LowReIncomp.cfg"
 
-        if not selected_file:
-            messagebox.showinfo("Info", "Could not determine a preset for the given values.")
-            return
-
         cfg_path = os.path.join(self.script_dir, selected_file)
         print(f"Loading recommended settings from: {cfg_path}")
 
         self.loaded_cfg_settings = self.parse_su2_cfg(cfg_path)
-        if self.loaded_cfg_settings is None:
+        if not self.loaded_cfg_settings:
             self.loaded_cfg_settings = {}
             return
 
-        self.flow_regime_var.set(new_regime)
+        self.flow_regime_combo.setCurrentText(new_regime)
         self.update_su2_settings_display()
         self.apply_loaded_settings()
+
         self.loaded_cfg_settings = {}
 
-        messagebox.showinfo("Success", f"Successfully loaded settings from {selected_file}.")
+        QMessageBox.information(
+            self,
+            "Success",
+            f"Successfully loaded settings from {selected_file}."
+        )
 
     def apply_loaded_settings(self):
-        """Apply values from self.loaded_cfg_settings to self.su2_setting_vars."""
-        if not getattr(self, "loaded_cfg_settings", None):
+        if not self.loaded_cfg_settings:
             return
 
         print("Applying loaded settings to GUI...")
-        for key, var in self.su2_setting_vars.items():
-            upper_key = key.upper()
-            if upper_key not in self.loaded_cfg_settings:
+
+        for key, widget in self.su2_setting_widgets.items():
+            ukey = key.upper()
+            if ukey not in self.loaded_cfg_settings:
                 continue
 
-            loaded_val = self.loaded_cfg_settings[upper_key]
+            value = self.loaded_cfg_settings[ukey]
 
             try:
-                if upper_key == "CONV_NUM_METHOD_FLOW":
-                    settings_dict = (
+                if ukey == "CONV_NUM_METHOD_FLOW":
+                    settings = (
                         SU2_INCOMPRESSIBLE_SETTINGS
-                        if self.flow_regime_var.get() == "Incompressible"
+                        if self.flow_regime_combo.currentText() == "Incompressible"
                         else SU2_COMPRESSIBLE_SETTINGS
                     )
-                    found = False
-                    for category, schemes in settings_dict["CONV_NUM_METHOD_FLOW"].items():
-                        if loaded_val in schemes:
-                            self.conv_category_var.set(category)
+
+                    applied = False
+                    for category, schemes in settings['CONV_NUM_METHOD_FLOW'].items():
+                        if value in schemes:
+                            self.conv_category_combo.setCurrentText(category)
                             self._on_conv_method_category_change()
-                            var.set(loaded_val)
-                            found = True
-                            print(f"  Applied {upper_key} = {loaded_val} (Category: {category})")
+                            self.conv_scheme_combo.setCurrentText(value)
+                            print(f"  Applied {ukey} = {value} (Category: {category})")
+                            applied = True
                             break
-                    if not found:
-                        print(f"  Warning: Could not map {upper_key} = {loaded_val} to a known category.")
-                else:
-                    var.set(loaded_val)
-                    print(f"  Applied {upper_key} = {loaded_val}")
 
+                    if not applied:
+                        print(f"  Warning: Failed to apply {ukey}: {value}")
+                    continue
             except Exception as e:
-                print(f"  Warning: Could not apply {upper_key}={loaded_val}. Error: {e}")
+                print(f"  Error applying {ukey}: {e}")
 
-    def check_turbulence_status(self, event=None):
-        try:
-            is_turbulent = True
-            if 'SOLVER' in self.su2_setting_vars:
-                if self.su2_setting_vars['SOLVER'].get() == 'EULER':
-                    is_turbulent = False
-            if 'KIND_TURB_MODEL' in self.su2_setting_vars:
-                if self.su2_setting_vars['KIND_TURB_MODEL'].get() == 'NONE':
-                    is_turbulent = False
-            self.conv_settings.toggle_turbulence(is_turbulent)
-        except:
-            pass
+    def parse_su2_cfg(self, file_path):
+        settings = {}
 
-    def take_input_and_parameterize(self):
-        self.xcoords, self.ycoords = read_airfoil.read_airfoil_coordinates(
-            self.directory,
-            self.selected_airfoil_path
-        )
-        if self.xcoords.size == 0:
-            messagebox.showerror(
-                "File Error",
-                f"Could not read coordinates from {self.selected_airfoil_path}.\nCheck file format."
+        if not os.path.exists(file_path):
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Config file not found:\n{file_path}"
             )
-            return
-        p = Parsec(self.directory, self.selected_airfoil_path)
-        c = CST(self.directory, self.selected_airfoil_path)
-        self.foil1 = p.foil()
-        self.foil2 = c.foil()
-        self.plot_airfoil(self.xcoords, self.foil1, self.ycoords, self.foil2)
-        self.meth, self.parsec_error, self.cst_error = error(self.foil1, self.foil2, self.ycoords)
+            return None
 
-    def xfoil_analyze_threaded(self):
-        if self.xfoil_thread and self.xfoil_thread.is_alive():
-            messagebox.showwarning("Busy", "XFoil analysis is already running.")
-            return
-        self.xfoil_analyze_button.config(state=tk.DISABLED)
-        self.xfoil_thread = threading.Thread(target=self.xfoil_analyze)
-        self.xfoil_thread.daemon = True
-        self.xfoil_thread.start()
-        self.root.after(100, self.check_xfoil_thread)
-
-    def check_xfoil_thread(self):
-        if self.xfoil_thread.is_alive():
-            self.root.after(100, self.check_xfoil_thread)
-        else:
-            self.xfoil_analyze_button.config(state=tk.NORMAL)
-            print("XFoil analysis thread finished.")
-
-    def sanitize_for_xfoil(self, filepath):
-        """
-        Reads the .dat file, ensures correct XFOIL formatting:
-        1. Header on first line.
-        2. Order: Trailing Edge (Top) -> Leading Edge -> Trailing Edge (Bottom).
-        3. Normalized coordinates.
-        """
         try:
-            # Read data
-            with open(filepath, 'r') as f:
-                lines = f.readlines()
-
-            coords = []
-            header = "Analyzed_Airfoil"
-            try:
-                float(lines[0].split()[0])
-            except ValueError:
-                header = lines[0].strip()
-                lines = lines[1:]
-
-            for line in lines:
-                parts = line.split()
-                if len(parts) >= 2:
-                    try:
-                        coords.append([float(parts[0]), float(parts[1])])
-                    except ValueError:
+            with open(file_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("%"):
                         continue
 
-            coords = np.array(coords)
-            le_idx = np.argmin(coords[:, 0])
-            part1 = coords[:le_idx + 1]
-            part2 = coords[le_idx:]
-            if np.mean(part1[:, 1]) > np.mean(part2[:, 1]):
-                upper = part1
-                lower = part2
+                    m = re.match(r'^([A-Za-z0-9_]+)\s*=\s*(.*)', line)
+                    if m:
+                        key = m.group(1).strip().upper()
+                        value = m.group(2).split("%")[0].strip()
+                        settings[key] = value
+
+        except Exception as e:
+            QMessageBox.critical(self, "Parse Error", str(e))
+            return None
+
+        print(f"Parsed {len(settings)} settings from {file_path}")
+        return settings
+
+    def _on_parallel_toggle(self):
+        self.num_cores_entry.setEnabled(self.use_mpi_check.isChecked())
+
+    def mesh(self):
+        self.run_gmsh_process(generate_mesh)
+
+    def hybrid(self):
+        self.run_gmsh_process(generate_hybrid)
+
+    def run_gmsh_process(self, func):
+        try:
+            re_val = float(self.su2_re_entry.text())
+            mach = float(self.su2_mach_entry.text())
+            yp = float(self.yplus_entry.text())
+
+            if func == generate_mesh:
+                args = (self.xcoords, self.ycoords, re_val, mach)
             else:
-                upper = part2
-                lower = part1
+                args = (self.upper_surface, self.lower_surface, re_val, mach)
 
-            upper = upper[np.argsort(upper[:, 0])[::-1]]
-            lower = lower[np.argsort(lower[:, 0])]
-            final_coords = np.concatenate((upper, lower[1:]))
-            with open(filepath, 'w') as f:
-                f.write(f"{header}\n")
-                for x, y in final_coords:
-                    f.write(f" {x:.6f}  {y:.6f}\n")
+            kwargs = {'y_plus': yp, 'show_graphics': self.show_gmsh_check.isChecked(), 'hide_output': False}
 
-            print(f"Sanitized airfoil file at {filepath}")
-            return True
-
+            p = multiprocessing.Process(target=func, args=args, kwargs=kwargs)
+            p.start()
+            QMessageBox.information(self, "Meshing", "Gmsh started in background.")
+            self.su2_analysis_button.setEnabled(True)
         except Exception as e:
-            print(f"Error sanitizing XFOIL file: {e}")
-            return False
+            QMessageBox.critical(self, "Error", str(e))
 
-    def xfoil_analyze(self):
-        xfoil_path = self.xfoil_path_entry.get()
-        int_path = self.int_path_entry.get()
-        os.makedirs(int_path, exist_ok=True)
-        airfoil_path = os.path.join(int_path, "output.dat")
+    def run_su2_workflow_in_thread(self):
+        self.su2_analysis_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
 
-        if not os.path.exists(airfoil_path):
-            messagebox.showerror("Error", f"Airfoil data file not found at {airfoil_path}.")
-            self.root.after(0, lambda: self.xfoil_analyze_button.config(state=tk.NORMAL))
-            return
-        if not self.sanitize_for_xfoil(airfoil_path):
-            messagebox.showerror("Error", "Could not sanitize airfoil file format.")
-            self.root.after(0, lambda: self.xfoil_analyze_button.config(state=tk.NORMAL))
-            return
+        gui_settings = {}
+        for k, w in self.su2_setting_widgets.items():
+            if isinstance(w, QComboBox):
+                gui_settings[k] = w.currentText()
+            elif isinstance(w, QLineEdit):
+                gui_settings[k] = w.text()
+
+        res, iter_val = self.conv_settings.get_config_string()
+        gui_settings['CONV_RESIDUAL_MINVAL'] = res
+        gui_settings['ITER'] = iter_val
+        gui_settings['EXT_ITER'] = iter_val
 
         try:
-            Re = float(self.re_entry.get())
-            M = float(self.mach_entry.get())
-            alpha_max = float(self.alpha_max_entry.get())
-            alpha_min = float(self.alpha_min_entry.get())
-            alpha_step = float(self.alpha_step_entry.get())
+            params = {
+                'reynolds': float(self.su2_re_entry.text()),
+                'mach': float(self.su2_mach_entry.text()),
+                'alpha_min': float(self.su2_alpha_min_entry.text()),
+                'alpha_max': float(self.su2_alpha_max_entry.text()),
+                'alpha_step': float(self.su2_alpha_step_entry.text()),
+                'base_output_dir': self.int_path_entry.text(),
+                'flow_regime': self.flow_regime_combo.currentText(),
+                'gui_settings': gui_settings,
+                'mesh_filepath': os.path.join(os.getcwd(), "airfoil.su2"),
+                'polar_filename': self.polar_filename_entry.text(),
+                'enable_live_plotting': self.live_plot_check.isChecked()
+            }
         except ValueError:
-            messagebox.showerror("Input Error", "Please ensure all XFoil inputs are valid numbers.")
-            self.root.after(0, lambda: self.xfoil_analyze_button.config(state=tk.NORMAL))
+            QMessageBox.warning(self, "Error", "Invalid numeric inputs")
+            self.su2_analysis_button.setEnabled(True)
             return
+
+        threading.Thread(target=self.su2_worker, kwargs=params, daemon=True).start()
+
+    def su2_worker(self, **kwargs):
+        def gui_cb(res):
+            self.plot_su2_signal.emit(res)
+
+        def plot_cb(q, a, u):
+            self.request_plot_window_signal.emit(q, a, u)
+            return None
+
+        kwargs['gui_update_callback'] = gui_cb
+        kwargs['plot_window_callback'] = plot_cb
+        kwargs['su2_runner'] = self.su2_runner
+
         try:
-            perform_xfoil_analysis(
-                xfoil_path,
-                self.xfoil_result_frame,
-                int_path,
-                airfoil_path,
-                Re,
-                alpha_max,
-                alpha_min,
-                alpha_step,
-                M
+            self.su2_runner.update_parallel_settings(
+                self.use_mpi_check.isChecked(),
+                int(self.num_cores_entry.text())
             )
-        except FileNotFoundError:
-            messagebox.showerror("XFoil Error", "Analysis failed. Could not find polar file.")
+            execute_su2_analysis_workflow(**kwargs)
         except Exception as e:
-            messagebox.showerror("XFoil Error", f"An unexpected error occurred: {e}")
+            print(f"Workflow Crash: {e}")
+        finally:
+            self.su2_finished_signal.emit()
 
-    def plot_airfoil(self, xcoords, foil1, ycoords, foil2):
-        for widget in self.canvas_result_frame.winfo_children():
-            widget.destroy()
-        fig, axs = plt.subplots(2, 1, figsize=(10, 3))
-        axs[0].plot(xcoords, foil1, 'r')
-        axs[0].plot(xcoords, ycoords, ':b')
-        axs[0].legend(['PARSEC', 'Actual'])
-        axs[0].set_title('PARSEC Parameterization')
-        axs[0].grid()
-        axs[0].set_aspect('equal', adjustable='box')
-        axs[1].plot(xcoords, foil2, 'r')
-        axs[1].plot(xcoords, ycoords, ':b')
-        axs[1].legend(["CST", "Actual"])
-        axs[1].set_title('CST Parameterization')
-        axs[1].grid()
-        axs[1].set_aspect('equal', adjustable='box')
-        plt.tight_layout()
-        canvas = FigureCanvasTkAgg(fig, master=self.canvas_result_frame)
-        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        canvas.draw()
-        plt.close(fig)
+    def on_su2_analysis_finish(self):
+        self.su2_analysis_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        QMessageBox.information(self, "SU2", "Analysis Complete.")
 
-    def plot_su2_results(self, results_list):
-        if not results_list:
-            messagebox.showinfo("SU2 Results", "SU2 analysis completed, but no valid results were generated to plot.")
-            return
-        for widget in self.su2_plot_canvas_frame.winfo_children():
-            widget.destroy()
+    def stop_su2_analysis(self):
+        self.su2_runner.stop()
 
-        AoA_values, Cl_values, Cd_values, Cm_values = extract_su2_polar_data(results_list)
+    def open_live_plotter(self, queue, aoa, unsteady):
+        win = LivePlotterWindow(queue, aoa, unsteady)
+        win.show()
+        self.live_windows.append(win)
 
-        if not any(v is not None and not np.isnan(v) for v in Cl_values):
-            messagebox.showinfo("SU2 Results", "Could not extract valid Cl/Cd data from SU2 history files.")
-            return
+    def plot_su2_results(self, results):
+        self.su2_polar_canv.figure.clear()
+        ax = self.su2_polar_canv.figure.add_subplot(111)
+        ax.set_facecolor('#2b2b2b')
+        ax.tick_params(colors='#f8f8f2')
+        ax.xaxis.label.set_color('#f8f8f2')
+        ax.yaxis.label.set_color('#f8f8f2')
+        ax.title.set_color('#f8f8f2')
+        for spine in ax.spines.values():
+            spine.set_edgecolor('#555555')
+        AoA, Cl, Cd, Cm = extract_su2_polar_data(results)
 
-        fig, axs = plt.subplots(1, 2, figsize=(10, 4))
-        axs[0].plot(AoA_values, Cl_values, 'o-b')
-        axs[0].set_xlabel("Angle of Attack (deg)")
-        axs[0].set_ylabel("Coefficient of Lift (Cl)")
-        axs[0].set_title("Cl vs. AoA (SU2)")
-        axs[0].grid(True)
+        if Cl and Cd and not all(np.isnan(Cl)):
+            ax.plot(Cd, Cl, 'o-', color='#62b6ef')
+            ax.set_xlabel("Cd");
+            ax.set_ylabel("Cl");
+            ax.set_title("SU2 Polar")
+            ax.grid(True, color='#555555')
+        self.su2_polar_canv.draw()
 
-        axs[1].plot(Cd_values, Cl_values, 'o-r')
-        axs[1].set_xlabel("Coefficient of Drag (Cd)")
-        axs[1].set_ylabel("Coefficient of Lift (Cl)")
-        axs[1].set_title("Drag Polar (SU2)")
-        axs[1].grid(True)
+        while self.visual_layout.count():
+            child = self.visual_layout.takeAt(0)
+            if child.widget(): child.widget().deleteLater()
 
-        plt.tight_layout()
-        canvas = FigureCanvasTkAgg(fig, master=self.su2_plot_canvas_frame)
-        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        canvas.draw()
-        plt.close(fig)
-        for widget in self.su2_visual_frame.winfo_children():
-            widget.destroy()
+        if not results: return
 
-        last_aoa, _, last_flow_file, _ = results_list[-1]
-        run_dir = os.path.dirname(last_flow_file)
+        last_res = results[-1]
+        if last_res[2]:
+            run_dir = os.path.dirname(last_res[2])
+            images = [f for f in os.listdir(run_dir) if f.endswith('.png')]
 
-        images = [f for f in os.listdir(run_dir) if f.endswith('.png')]
+            for img_name in sorted(images):
+                lbl_name = QLabel(img_name)
+                lbl_name.setStyleSheet("font-weight: bold;")
+                self.visual_layout.addWidget(lbl_name)
 
-        if not images:
-            ttk.Label(self.su2_visual_frame, text="No visualization images found for the last run.").pack(pady=10)
-            return
+                lbl_img = QLabel()
+                pix = QPixmap(os.path.join(run_dir, img_name))
+                if not pix.isNull():
+                    pix = pix.scaledToWidth(600, Qt.TransformationMode.SmoothTransformation)
+                    lbl_img.setPixmap(pix)
+                self.visual_layout.addWidget(lbl_img)
 
-        canvas_scroll = tk.Canvas(self.su2_visual_frame)
-        scrollbar = ttk.Scrollbar(self.su2_visual_frame, orient="vertical", command=canvas_scroll.yview)
-        scrollable_frame = ttk.Frame(canvas_scroll)
+    def open_dir(self, line_edit):
+        d = QFileDialog.getExistingDirectory(self, "Select Directory")
+        if d: line_edit.setText(d)
 
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas_scroll.configure(scrollregion=canvas_scroll.bbox("all"))
-        )
-        canvas_scroll.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas_scroll.configure(yscrollcommand=scrollbar.set)
-
-        canvas_scroll.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-
-        for img_name in sorted(images):
-            try:
-                img_path = os.path.join(run_dir, img_name)
-                pil_img = Image.open(img_path)
-
-                base_width = 600
-                w_percent = (base_width / float(pil_img.size[0]))
-                h_size = int((float(pil_img.size[1]) * float(w_percent)))
-                pil_img = pil_img.resize((base_width, h_size), Image.Resampling.LANCZOS)
-
-                tk_img = ImageTk.PhotoImage(pil_img)
-
-                img_container = ttk.Frame(scrollable_frame)
-                img_container.pack(pady=10)
-
-                ttk.Label(
-                    img_container,
-                    text=img_name,
-                    font=('Segoe UI', 10, 'bold')
-                ).pack()
-                lbl = ttk.Label(img_container, image=tk_img)
-                lbl.image = tk_img
-                lbl.pack()
-
-            except Exception as e:
-                print(f"Failed to load image {img_name}: {e}")
+    def open_file(self, line_edit):
+        f, _ = QFileDialog.getOpenFileName(self, "Select File")
+        if f: line_edit.setText(f)
 
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    root = tk.Tk()
-    screen_width = root.winfo_screenwidth()
-    screen_height = root.winfo_screenheight()
-    root.geometry(f"{int(screen_width * 0.8)}x{int(screen_height * 0.8)}")
-    app = App(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    font = QFont("Segoe UI", 9)
+    app.setFont(font)
+
+    from PyQt6.QtGui import QPalette, QColor
+    from PyQt6.QtCore import Qt
+
+    dark_palette = QPalette()
+    dark_palette.setColor(QPalette.ColorRole.Window,          QColor(43, 43, 43))
+    dark_palette.setColor(QPalette.ColorRole.WindowText,      QColor(248, 248, 242))
+    dark_palette.setColor(QPalette.ColorRole.Base,            QColor(30, 30, 30))
+    dark_palette.setColor(QPalette.ColorRole.AlternateBase,   QColor(53, 53, 53))
+    dark_palette.setColor(QPalette.ColorRole.ToolTipBase,     QColor(248, 248, 242))
+    dark_palette.setColor(QPalette.ColorRole.ToolTipText,     QColor(248, 248, 242))
+    dark_palette.setColor(QPalette.ColorRole.Text,            QColor(248, 248, 242))
+    dark_palette.setColor(QPalette.ColorRole.Button,          QColor(53, 53, 53))
+    dark_palette.setColor(QPalette.ColorRole.ButtonText,      QColor(248, 248, 242))
+    dark_palette.setColor(QPalette.ColorRole.BrightText,      QColor(255, 85, 85))
+    dark_palette.setColor(QPalette.ColorRole.Link,            QColor(98, 182, 239))
+    dark_palette.setColor(QPalette.ColorRole.Highlight,       QColor(98, 182, 239))
+    dark_palette.setColor(QPalette.ColorRole.HighlightedText, QColor(0, 0, 0))
+    dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor(127, 127, 127))
+    dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text,       QColor(127, 127, 127))
+    dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(127, 127, 127))
+    app.setPalette(dark_palette)
+    app.setStyleSheet("QToolTip { color: #f8f8f2; background-color: #2b2b2b; border: 1px solid #62b6ef; }")
+
+    window = FalconApp()
+    window.show()
+    sys.exit(app.exec())

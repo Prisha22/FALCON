@@ -7,78 +7,78 @@ import read_airfoil
 
 class AirfoilNormalizer:
     """Normalize airfoil coordinates to standard format."""
-    
+
     def __init__(self):
         self.le_index = None
         self.translation = None
         self.rotation_angle = None
         self.scale_factor = None
-    
+
     def normalize(self, xcoords, ycoords):
         xcoords = np.array(xcoords)
         ycoords = np.array(ycoords)
-        
+
         # Find leading edge
         self.le_index = np.argmin(xcoords)
         x_le = xcoords[self.le_index]
         y_le = ycoords[self.le_index]
-        
+
         # Translate to origin
         x_translated = xcoords - x_le
         y_translated = ycoords - y_le
         self.translation = (x_le, y_le)
-        
+
         # Find trailing edge
         x_te = (x_translated[0] + x_translated[-1]) / 2
         y_te = (y_translated[0] + y_translated[-1]) / 2
-        
+
         # Rotate to align with x-axis
         self.rotation_angle = np.arctan2(y_te, x_te)
         cos_theta = np.cos(-self.rotation_angle)
         sin_theta = np.sin(-self.rotation_angle)
-        
+
         x_rotated = x_translated * cos_theta - y_translated * sin_theta
         y_rotated = x_translated * sin_theta + y_translated * cos_theta
-        
+
         # Scale to chord = 1
-        chord_length = np.sqrt(x_te**2 + y_te**2)
+        chord_length = np.sqrt(x_te ** 2 + y_te ** 2)
         self.scale_factor = chord_length
-        
+
         x_norm = x_rotated / chord_length
         y_norm = y_rotated / chord_length
-        
+
         return x_norm, y_norm
-    
+
     def denormalize(self, x_norm, y_norm):
         x_norm = np.array(x_norm)
         y_norm = np.array(y_norm)
-        
+
         # Unscale
         x_scaled = x_norm * self.scale_factor
         y_scaled = y_norm * self.scale_factor
-        
+
         # Unrotate
         cos_theta = np.cos(self.rotation_angle)
         sin_theta = np.sin(self.rotation_angle)
-        
+
         x_unrotated = x_scaled * cos_theta - y_scaled * sin_theta
         y_unrotated = x_scaled * sin_theta + y_scaled * cos_theta
-        
+
         # Untranslate
         x_original = x_unrotated + self.translation[0]
         y_original = y_unrotated + self.translation[1]
-        
+
         return x_original, y_original
 
 
 class CST:
     def __init__(self, airfoil_path, airfoil_name):
         xcoords, ycoords = read_airfoil.read_airfoil_coordinates(airfoil_path, airfoil_name)
-        
+
         # Store original coordinates
         self.xcoords_original = xcoords
         self.ycoords_original = ycoords
-        
+
         # Normalize coordinates
         self.normalizer = AirfoilNormalizer()
         self.xcoords, self.ycoords = self.normalizer.normalize(xcoords, ycoords)
@@ -150,28 +150,13 @@ class CST:
         weights = best_result.x
 
         foil2 = self.CSTForFitBuild(self.xcoords, weights, flw, 0.5, 1)
-        
-        return foil2,weights,best_result
+
+        return foil2
 
     def foil(self, return_original_coords=True):
-        """
-        Fit CST parameterization to airfoil.
-        
-        Parameters:
-        -----------
-        return_original_coords : bool
-            If True, return coordinates in original coordinate system.
-            If False, return normalized coordinates.
-            
-        Returns:
-        --------
-        foil_coords : numpy array
-            Fitted y-coordinates (normalized or original based on parameter)
-        """
-        foil_normalized,weights,best_result = self.getCST(self.xcoords, self.ycoords)
-        print(f"CST optimization complete. Final cost: {best_result.cost:.6e}")
-        print(f"CST parameters: {weights}")
-        
+
+        foil_normalized = self.getCST(self.xcoords, self.ycoords)
+
         if return_original_coords:
             # Convert back to original coordinate system
             _, foil_original = self.normalizer.denormalize(self.xcoords, foil_normalized)

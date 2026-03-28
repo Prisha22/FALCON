@@ -1,4 +1,3 @@
-# su2_analyzer.py
 import os
 import subprocess
 import numpy as np
@@ -10,23 +9,24 @@ import time
 from queue import Queue
 import io
 import pyvista as pv
+
 pv.OFF_SCREEN = True
 import glob
 import logging
 import re
 from typing import List, Tuple, Optional, Dict, Callable
+import matplotlib
 import matplotlib.pyplot as plt
 
-# Custom import for live plotting
 try:
     from live_plotter import data_reader_thread
 except ImportError:
     print("Warning: 'live_plotter' not found. Live plotting will be disabled.")
     data_reader_thread = None
 
-# --- CONSTANTS ---
+
 FIXED_CAMERA_POSITION = ((0.5, 0, 8), (0.5, 0, 0), (0, 1, 0))
-PROCESS_TERMINATION_TIMEOUT = 5  # seconds
+PROCESS_TERMINATION_TIMEOUT = 5
 PLOTTER_WINDOW_SIZE = (1200, 800)
 SCREENSHOT_WINDOW_SIZE = (1600, 1000)
 
@@ -83,45 +83,37 @@ class SU2Runner:
         self.executables_found = self._validate_executables()
 
     def _validate_executables(self) -> bool:
-        """Validates that required executables are accessible."""
         print("\n--- Checking For Required Executables ---")
 
-        # SU2 is always required
         su2_path = shutil.which(self.su2_cfd_path)
         if not su2_path:
- 
             if os.path.isabs(self.su2_cfd_path) and os.path.exists(self.su2_cfd_path):
                 su2_path = self.su2_cfd_path
-        
+
         if su2_path:
             print(f"SU2 executable found at: {su2_path}")
-            self.su2_cfd_full_path = os.path.abspath(su2_path)  # Store absolute path
+            self.su2_cfd_full_path = os.path.abspath(su2_path)
         else:
             print(f"ERROR: SU2 executable '{self.su2_cfd_path}' could not be found.")
             print(f"Current PATH: {os.environ.get('PATH', 'Not set')}")
             return False
 
-        # MPI only required if use_mpi is True
         if self.use_mpi:
             mpi_path = shutil.which(self.mpi_exec_path)
             if not mpi_path:
                 if os.path.isabs(self.mpi_exec_path) and os.path.exists(self.mpi_exec_path):
                     mpi_path = self.mpi_exec_path
-            
+
             if mpi_path:
                 print(f"MPI executable found at: {mpi_path}")
-                self.mpi_exec_path = os.path.abspath(mpi_path)  # Store absolute path
+                self.mpi_exec_path = os.path.abspath(mpi_path)
             else:
                 print(f"ERROR: MPI executable '{self.mpi_exec_path}' not found.")
                 return False
-        
+
         return True
 
     def update_parallel_settings(self, use_mpi: bool, num_procs: Optional[int] = None):
-        """
-        Called from the GUI when the user toggles 'Use MPI parallelisation'
-        or changes core count.
-        """
         self.use_mpi = bool(use_mpi)
         if num_procs is not None and num_procs > 0:
             self.num_procs = int(num_procs)
@@ -130,13 +122,11 @@ class SU2Runner:
         print(f"  use_mpi = {self.use_mpi}")
         print(f"  num_procs = {self.num_procs}")
 
-
         self.executables_found = self._validate_executables()
 
     def stop(self):
-        """Stops the currently running SU2 process gracefully and sets the global stop flag."""
         self.stop_requested = True
-        proc = self.current_process  
+        proc = self.current_process
 
         if proc and proc.poll() is None:
             print("Sending termination signal to SU2 process...")
@@ -151,17 +141,13 @@ class SU2Runner:
             print("No active SU2 process to stop, or process already finished.")
 
     def run_analysis(
-        self,
-        config_path: str,
-        angle_deg: float,
-        output_dir: str,
-        data_queue: Queue,
-        stop_event
+            self,
+            config_path: str,
+            angle_deg: float,
+            output_dir: str,
+            data_queue: Queue,
+            stop_event
     ) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
-        """
-        Runs a single SU2 analysis for a given angle of attack.
-        Returns (status, history_csv, solution_vtu, surface_csv).
-        """
         if not self.executables_found:
             print("Aborting run: executables were not found during initial check.")
             return "FAILED", None, None, None
@@ -187,7 +173,6 @@ class SU2Runner:
             reader_thread.daemon = True
             reader_thread.start()
 
-        # Construct command depending on serial / MPI mode
         if self.use_mpi:
             command = [
                 self.mpi_exec_path, "-n", str(self.num_procs),
@@ -207,7 +192,7 @@ class SU2Runner:
         print(f"--- Starting SU2 (AoA={angle_deg:.2f}) ---")
         print(f"Command: {' '.join(command)}")
         print(f"Working Dir: {output_dir}\n")
-    
+
         try:
             creation_flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             proc = subprocess.Popen(
@@ -227,7 +212,6 @@ class SU2Runner:
                     if self.stop_requested:
                         break
 
-                    # Detect MPI activity (ranks / parallel mention)
                     if "MPI rank" in line or "parallel" in line.lower():
                         print("🔹 MPI ACTIVITY DETECTED:", line.strip())
 
@@ -258,15 +242,13 @@ class SU2Runner:
                 reader_thread.join()
             self.current_process = None
 
-
         surface_pattern = os.path.join(output_dir, f"surf_aoa_{formatted_aoa_for_output}*.csv")
         surface_files = glob.glob(surface_pattern)
         if not surface_files:
-
             exact_surface = os.path.join(output_dir, f"surf_aoa_{formatted_aoa_for_output}.csv")
             if os.path.exists(exact_surface):
                 surface_files = [exact_surface]
-        
+
         actual_surface_file = surface_files[0] if surface_files else None
         if surface_files and len(surface_files) > 1:
             surface_files.sort(key=os.path.getmtime, reverse=True)
@@ -277,10 +259,9 @@ class SU2Runner:
             exact_solution = os.path.join(output_dir, f"flow_aoa_{formatted_aoa_for_output}.vtu")
             if os.path.exists(exact_solution):
                 solution_files = [exact_solution]
-        
+
         actual_solution_file = solution_files[0] if solution_files else None
         if solution_files and len(solution_files) > 1:
-            # Multiple files found, get the latest
             solution_files.sort(key=os.path.getmtime, reverse=True)
             actual_solution_file = solution_files[0]
 
@@ -288,20 +269,16 @@ class SU2Runner:
 
 
 def prepare_su2_config(
-    output_dir: str,
-    gui_settings: dict,
-    mesh_filename: str,
-    flow_regime: str,
-    aoa: float,
-    reynolds: float,
-    mach: float
+        output_dir: str,
+        gui_settings: dict,
+        mesh_filename: str,
+        flow_regime: str,
+        aoa: float,
+        reynolds: float,
+        mach: float
 ) -> Optional[str]:
-    """
-    Generates an SU2 configuration file with regime-specific settings.
-    """
     print(f"Preparing SU2 config for AoA={aoa:.2f}, Re={reynolds}, M={mach}, Regime={flow_regime}")
 
-    # Determine specific flow regime
     is_transonic = flow_regime.lower() == "compressible" and 0.7 <= mach < 1.0
     is_supersonic = flow_regime.lower() == "compressible" and mach >= 1.0
     is_incompressible = flow_regime.lower() == "incompressible"
@@ -313,7 +290,6 @@ def prepare_su2_config(
         ""
     ]
 
-    # --- Define Flow State Variables for Reference Calculation ---
     ssl_temp = 288.15
     ssl_pres = 101325.0
     ssl_dens = 1.225
@@ -327,7 +303,6 @@ def prepare_su2_config(
         sound_speed = np.sqrt(gamma * r_gas * ssl_temp)
         velocity_magnitude = mach * sound_speed
     else:
-        # Compressible
         freestream_temp = gui_settings.get(
             'FREESTREAM_TEMPERATURE',
             293.0 if (is_transonic or is_supersonic) else 288.15
@@ -338,7 +313,6 @@ def prepare_su2_config(
         velocity_magnitude = mach * sound_speed
 
     if is_incompressible:
-        # ==================== INCOMPRESSIBLE FLOW ====================
         solver = gui_settings.get('SOLVER', 'INC_RANS')
         turb_model = gui_settings.get('KIND_TURB_MODEL', 'SST')
         trans_model = gui_settings.get('KIND_TRANS_MODEL', 'NONE')
@@ -392,7 +366,6 @@ def prepare_su2_config(
         ])
 
     else:
-        # ==================== COMPRESSIBLE FLOW ====================
         solver = gui_settings.get('SOLVER', 'RANS')
         turb_model = gui_settings.get('KIND_TURB_MODEL', 'SST' if is_supersonic else 'SA')
         trans_model = gui_settings.get('KIND_TRANS_MODEL', 'NONE')
@@ -443,7 +416,6 @@ def prepare_su2_config(
             ""
         ])
 
-    # ==================== REFERENCE VALUES ====================
     ref_area = gui_settings.get('REF_AREA', 1.0 if is_supersonic else 0 if is_transonic else 1.0)
 
     config_lines.extend([
@@ -456,7 +428,6 @@ def prepare_su2_config(
         ""
     ])
 
-    # ==================== SURFACE MARKERS ====================
     config_lines.extend([
         "% ------------------------ SURFACES IDENTIFICATION ----------------------------%",
         "MARKER_PLOTTING= ( Airfoil )",
@@ -466,7 +437,6 @@ def prepare_su2_config(
         config_lines.append("MARKER_DESIGNING= ( Airfoil )")
     config_lines.append("")
 
-    # ==================== DISCRETIZATION ====================
     if is_transonic:
         config_lines.extend([
             "% DISCRETIZATION",
@@ -476,7 +446,6 @@ def prepare_su2_config(
             ""
         ])
 
-    # ==================== NUMERICAL METHODS ====================
     config_lines.extend([
         "% ---------------------- NUMERICAL METHODS ------------------------------------%",
         f"NUM_METHOD_GRAD= {gui_settings.get('NUM_METHOD_GRAD', 'WEIGHTED_LEAST_SQUARES')}"
@@ -506,7 +475,6 @@ def prepare_su2_config(
     config_lines.append(f"MUSCL_TURB= {muscl_turb}")
     config_lines.append("")
 
-    # ==================== SOLUTION METHODS ====================
     config_lines.extend([
         "% SOLUTION METHODS",
         "TIME_DISCRE_FLOW= EULER_IMPLICIT",
@@ -534,7 +502,6 @@ def prepare_su2_config(
         ])
     config_lines.append("")
 
-    # ==================== LINEAR SOLVER ====================
     linear_solver = gui_settings.get('LINEAR_SOLVER', 'FGMRES')
     linear_solver_prec = gui_settings.get('LINEAR_SOLVER_PREC', 'ILU')
 
@@ -564,12 +531,8 @@ def prepare_su2_config(
             ""
         ])
 
-    # ==================== CONVERGENCE ====================
-
-    # Iterations (GUI may have written both ITER and EXT_ITER)
     iter_val = gui_settings.get('ITER', gui_settings.get('EXT_ITER', 3000))
 
-    # User convergence settings (this is the critical bit)
     user_conv_field = gui_settings.get('CONV_FIELD')
     user_min_val_raw = gui_settings.get('CONV_RESIDUAL_MINVAL', "-8.0")
 
@@ -621,7 +584,6 @@ def prepare_su2_config(
             ""
         ])
 
-    # ==================== OUTPUT ====================
     if is_incompressible:
         screen_output = "INNER_ITER, RMS_PRESSURE, RMS_MOMENTUM-X, RMS_MOMENTUM-Y, RMS_ENERGY, LIFT, DRAG, MOMENT"
     elif is_supersonic:
@@ -640,9 +602,7 @@ def prepare_su2_config(
             "RMS_ENERGY, LIFT, DRAG, MOMENT"
         )
 
-
     output_files = gui_settings.get('OUTPUT_FILES', '(RESTART, TECPLOT_ASCII, PARAVIEW, SURFACE_CSV)')
-
 
     config_lines.extend([
         "% ------------------------- INPUT/OUTPUT INFORMATION --------------------------%",
@@ -714,17 +674,17 @@ def prepare_su2_config(
         print(f"Error writing config file {config_path}: {e}")
         return None
 
+
 def _save_screenshot(
-    mesh,
-    output_path: str,
-    title: str,
-    show_edges: bool,
-    scalars: Optional[str] = None,
-    cmap: str = 'viridis',
-    show_scalar_bar: bool = False,
-    mesh_color: Optional[str] = None
+        mesh,
+        output_path: str,
+        title: str,
+        show_edges: bool,
+        scalars: Optional[str] = None,
+        cmap: str = 'viridis',
+        show_scalar_bar: bool = False,
+        mesh_color: Optional[str] = None
 ):
-    """Internal helper to create and save a single PyVista screenshot."""
     plotter = pv.Plotter(off_screen=True, window_size=PLOTTER_WINDOW_SIZE)
     bg_color = COLOR_BG_WHITE if not scalars else COLOR_BG_BLACK
     plotter.set_background(bg_color)
@@ -751,53 +711,49 @@ def _save_screenshot(
     plotter.add_title(title, font_size=30, color='black' if not scalars else 'white')
     plotter.show_axes()
     plotter.screenshot(output_path, window_size=SCREENSHOT_WINDOW_SIZE)
-    
+
     try:
         plotter.close()
         plotter.deep_clean()
     except Exception as e:
         print(f"Warning: Error closing PyVista plotter: {e}")
-    
+
     try:
         print(f"Saved screenshot for '{title}' to: {output_path}")
     except Exception as e:
         print(f"Warning: Error printing screenshot confirmation: {e}")
 
+
 def save_cp_vs_chord_plot(aoa: float, output_folder: str):
-    """
-    Reads surface data from Tecplot ASCII (.dat) file and saves a Cp vs. x/c plot.
-    Uses surface CSV file to identify airfoil surface coordinates.
-    """
-    
     formatted_aoa = f"{aoa:.2f}"
     csv_pattern = os.path.join(output_folder, f"surf_aoa_{formatted_aoa}_*.csv")
     csv_files = glob.glob(csv_pattern)
-    
+
     if not csv_files:
         csv_pattern_fallback = os.path.join(output_folder, f"surf_aoa_{formatted_aoa}.csv")
         if os.path.exists(csv_pattern_fallback):
             csv_files = [csv_pattern_fallback]
-    
+
     if not csv_files:
         print(f"ERROR: No surface CSV files found in {output_folder}")
         print(f"Searched pattern: surf_aoa_{formatted_aoa}_*.csv")
         return
-    
+
     def extract_iteration(filepath):
         match = re.search(r'_(\d+)\.csv$', filepath)
         return int(match.group(1)) if match else 0
-    
+
     csv_files.sort(key=extract_iteration, reverse=True)
     csv_file = csv_files[0]
-    
+
     print(f"Found surface CSV file: {os.path.basename(csv_file)}")
     if len(csv_files) > 1:
         print(f"  (Using latest iteration: {len(csv_files)} files found)")
-    
+
     try:
         surface_df = pd.read_csv(csv_file)
         surface_df.columns = surface_df.columns.str.strip().str.replace('"', '').str.replace("'", "")
-        
+
         x_col_csv = None
         y_col_csv = None
         for col in surface_df.columns:
@@ -806,46 +762,46 @@ def save_cp_vs_chord_plot(aoa: float, output_folder: str):
                 x_col_csv = col
             elif col_lower in ['y']:
                 y_col_csv = col
-        
+
         if not x_col_csv or not y_col_csv:
             print(f"ERROR: Could not find x, y coordinates in surface CSV")
             print(f"Available columns: {surface_df.columns.tolist()}")
             return
-        
+
         surface_x = pd.to_numeric(surface_df[x_col_csv], errors='coerce').values
         surface_y = pd.to_numeric(surface_df[y_col_csv], errors='coerce').values
-        
+
         valid_mask = ~(np.isnan(surface_x) | np.isnan(surface_y))
         surface_x = surface_x[valid_mask]
         surface_y = surface_y[valid_mask]
-        
+
         print(f"Found {len(surface_x)} surface points from CSV")
-        
+
     except Exception as e:
         print(f"ERROR reading surface CSV: {e}")
         import traceback
         traceback.print_exc()
         return
-    
+
     dat_pattern = os.path.join(output_folder, "*.dat")
     dat_files = glob.glob(dat_pattern)
-    
+
     if not dat_files:
         print(f"ERROR: No .dat files found in {output_folder}")
         return
-    
+
     dat_files.sort(key=os.path.getmtime, reverse=True)
     file_to_read = dat_files[0]
-    
+
     print(f"Found Tecplot ASCII file: {os.path.basename(file_to_read)}")
 
     try:
         df = parse_tecplot_ascii(file_to_read)
-        
+
         if df.empty:
             print(f"ERROR: No data parsed from {os.path.basename(file_to_read)}")
             return
-        
+
         def get_col_name(candidates):
             for col in df.columns:
                 c_clean = col.strip().replace('"', '').replace("'", "").lower()
@@ -867,27 +823,27 @@ def save_cp_vs_chord_plot(aoa: float, output_folder: str):
         df[y_col] = pd.to_numeric(df[y_col], errors='coerce')
         df[cp_col] = pd.to_numeric(df[cp_col], errors='coerce')
         df = df.dropna(subset=[x_col, y_col, cp_col])
-        
+
         print(f"DAT file has {len(df)} valid data points")
         print(f"Surface x range: [{surface_x.min():.6f}, {surface_x.max():.6f}]")
         print(f"DAT x range: [{df[x_col].min():.6f}, {df[x_col].max():.6f}]")
-        
+
         tolerance = 1e-6
-        
+
         matched_data = []
         for sx, sy in zip(surface_x, surface_y):
             mask = (np.abs(df[x_col] - sx) < tolerance) & (np.abs(df[y_col] - sy) < tolerance)
             matches = df[mask]
-            
+
             if len(matches) > 0:
                 matched_data.append({
                     'x': sx,
                     'y': sy,
                     'cp': matches.iloc[0][cp_col]
                 })
-        
+
         print(f"Matched {len(matched_data)} points")
-        
+
         if not matched_data:
             print("ERROR: No matching points found between surface CSV and DAT file")
             print("Trying with larger tolerance...")
@@ -897,32 +853,33 @@ def save_cp_vs_chord_plot(aoa: float, output_folder: str):
                 matches = df[mask]
                 print(f"  Point ({sx:.6f}, {sy:.6f}): {len(matches)} matches")
             return
-        
+
         matched_df = pd.DataFrame(matched_data)
-        
+
         max_x = matched_df['x'].max()
         min_x = matched_df['x'].min()
         chord_length = max_x - min_x
-        
+
         if chord_length > 0.001:
             matched_df['x_norm'] = (matched_df['x'] - min_x) / chord_length
         else:
             matched_df['x_norm'] = matched_df['x']
-        
+
         upper_surface = matched_df[matched_df['y'] >= 0].copy().sort_values('x')
         lower_surface = matched_df[matched_df['y'] < 0].copy().sort_values('x')
-        
+
         try:
+            matplotlib.use("Agg")
             fig, ax = plt.subplots(figsize=(10, 6))
-            
+
             if len(upper_surface) > 0:
                 ax.scatter(upper_surface['x_norm'], upper_surface['cp'], color='r', label='Upper Surface', s=20)
             if len(lower_surface) > 0:
                 ax.scatter(lower_surface['x_norm'], lower_surface['cp'], color='b', label='Lower Surface', s=20)
-            
+
             if len(upper_surface) > 0 and len(lower_surface) > 0:
                 ax.legend(fontsize=12)
-            
+
             ax.set_title(f'$C_p$ Distribution | AoA = {aoa:.2f}°', fontsize=16)
             ax.set_xlabel('Normalized Chord (x/c)', fontsize=14)
             ax.set_ylabel('Pressure Coefficient (Cp)', fontsize=14)
@@ -934,7 +891,7 @@ def save_cp_vs_chord_plot(aoa: float, output_folder: str):
             plt.savefig(output_filename, dpi=300, bbox_inches='tight')
             plt.close(fig)
             print(f"Saved Cp plot to: {output_filename}")
-            
+
         except Exception as plot_error:
             print(f"ERROR creating Cp plot: {plot_error}")
             import traceback
@@ -949,77 +906,70 @@ def save_cp_vs_chord_plot(aoa: float, output_folder: str):
 
 
 def parse_tecplot_ascii(filepath: str) -> pd.DataFrame:
-    """
-    Parses a Tecplot ASCII (.dat) file and returns a pandas DataFrame.
-    Handles the VARIABLES and ZONE headers specific to Tecplot format.
-    """
     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
         lines = f.readlines()
-    
 
     variables = []
     data_start_idx = 0
     variables_complete = False
-    
+
     for i, line in enumerate(lines):
         line_upper = line.strip().upper()
-        
+
         if 'VARIABLES' in line_upper or (variables and not variables_complete):
             var_line = line.strip()
             if 'VARIABLES' in var_line.upper():
                 var_line = re.sub(r'VARIABLES\s*=\s*', '', var_line, flags=re.IGNORECASE)
-        
+
             quoted_vars = re.findall(r'"([^"]+)"', var_line)
             variables.extend(quoted_vars)
-            
+
             if var_line.rstrip().endswith(')') or not var_line.rstrip().endswith(','):
                 variables_complete = True
-                
+
         elif line_upper.startswith('ZONE'):
             data_start_idx = i + 1
             break
         elif line_upper.startswith('TITLE'):
             continue
-    
+
     if not variables:
         print("Warning: Could not find VARIABLES declaration in Tecplot file.")
         print("First few lines of file:")
         for line in lines[:10]:
             print(f"  {line.rstrip()}")
-    
-    # Read numerical data
+
     data_lines = []
     for line in lines[data_start_idx:]:
         line = line.strip()
-        if not line or line.startswith('#') or any(kw in line.upper() for kw in ['TITLE', 'VARIABLES', 'ZONE', 'AUXDATA']):
+        if not line or line.startswith('#') or any(
+                kw in line.upper() for kw in ['TITLE', 'VARIABLES', 'ZONE', 'AUXDATA']):
             continue
         try:
             values = [float(x) for x in line.split()]
-            if values: 
+            if values:
                 data_lines.append(values)
         except (ValueError, IndexError):
             continue
-    
+
     if not data_lines:
         print("ERROR: No numerical data found in Tecplot file!")
         return pd.DataFrame()
-    
+
     num_cols = len(data_lines[0])
-    
+
     if variables and len(variables) == num_cols:
         df = pd.DataFrame(data_lines, columns=variables)
-        #print(f"Successfully parsed {len(data_lines)} data rows with {num_cols} columns")
     else:
         if variables:
             print(f"Warning: Variable count mismatch. Expected {len(variables)}, got {num_cols} data columns")
         df = pd.DataFrame(data_lines, columns=[f'Col_{i}' for i in range(num_cols)])
         print(f"Using generic column names for {num_cols} columns")
-    
-    #print(f"Available columns: {df.columns.tolist()}"
+
     return df
 
+
 def find_column(df: pd.DataFrame, keywords: List[str]) -> Optional[str]:
-    """Find a DataFrame column matching any of the keywords (case-insensitive)."""
     for col in df.columns:
         col_upper = col.upper()
         if any(kw in col_upper for kw in keywords):
@@ -1028,7 +978,6 @@ def find_column(df: pd.DataFrame, keywords: List[str]) -> Optional[str]:
 
 
 def find_and_visualize_vtk_file(output_dir: str):
-    """Recursively searches for VTK/VTU files and visualizes the most recent one."""
     pyvista_logger = logging.getLogger('pyvista')
     pyvista_logger.setLevel(logging.ERROR)
 
@@ -1068,7 +1017,6 @@ def find_and_visualize_vtk_file(output_dir: str):
         folder_name = os.path.basename(output_folder)
         plot_title_base = f"AoA: {folder_name}"
 
-        # 1. Geometry View
         print("\n[1/3] Generating Geometry View...")
         surface_mesh = mesh.extract_surface()
         geometry_output_filename = os.path.join(output_folder, f"{base_filename}_Geometry.png")
@@ -1081,7 +1029,6 @@ def find_and_visualize_vtk_file(output_dir: str):
             mesh_color=COLOR_GEOMETRY,
         )
 
-        # 2. Domain Mesh View
         print("\n[2/3] Generating Domain Mesh View...")
         domain_output_filename = os.path.join(output_folder, f"{base_filename}_DomainMesh.png")
         _save_screenshot(
@@ -1148,10 +1095,6 @@ def find_and_visualize_vtk_file(output_dir: str):
 
 
 def visualize_single_vtk_file(vtk_file_path: str, aoa: float):
-    """
-    Generate PyVista screenshots (geometry, mesh, scalar fields) for a SINGLE VTK/VTU file.
-    Used to post-process every AoA separately.
-    """
     pyvista_logger = logging.getLogger('pyvista')
     pyvista_logger.setLevel(logging.ERROR)
 
@@ -1224,21 +1167,21 @@ def visualize_single_vtk_file(vtk_file_path: str, aoa: float):
 
 
 def execute_su2_analysis_workflow(
-    su2_runner: SU2Runner,
-    reynolds: float,
-    mach: float,
-    alpha_min: float,
-    alpha_max: float,
-    alpha_step: float,
-    base_output_dir: str,
-    flow_regime: str,
-    gui_settings: dict,
-    mesh_filepath: str,
-    gui_update_callback,
-    polar_filename: str = "aerodynamic_polar.csv",
-    pv_filename: str = "pv.csv",
-    enable_live_plotting: bool = False,
-    plot_window_callback=None
+        su2_runner: SU2Runner,
+        reynolds: float,
+        mach: float,
+        alpha_min: float,
+        alpha_max: float,
+        alpha_step: float,
+        base_output_dir: str,
+        flow_regime: str,
+        gui_settings: dict,
+        mesh_filepath: str,
+        gui_update_callback,
+        polar_filename: str = "aerodynamic_polar.csv",
+        pv_filename: str = "pv.csv",
+        enable_live_plotting: bool = False,
+        plot_window_callback=None
 ):
     print("Starting SU2 analysis workflow...")
     su2_runner.stop_requested = False
@@ -1297,7 +1240,6 @@ def execute_su2_analysis_workflow(
                     else:
                         print(f"[Post] Surface CSV missing for AoA {aoa:.2f}, skipping Cp plot.")
 
-    
                     if solution and os.path.exists(solution):
                         try:
                             visualize_single_vtk_file(solution, aoa)
@@ -1314,7 +1256,6 @@ def execute_su2_analysis_workflow(
             else:
                 print(f"SU2 run for AoA {aoa} failed. Moving to next AoA.")
 
-
     print("\nAll SU2 simulations complete or were stopped.")
 
     aoa_data, cl_data, cd_data, _ = extract_su2_polar_data(all_sim_results)
@@ -1329,9 +1270,6 @@ def execute_su2_analysis_workflow(
 
 
 def extract_su2_polar_data(results_list):
-    """
-    Extracts final AoA, Cl, Cd, and Cm from a list of completed simulation results.
-    """
     AoA_values = [res[0] for res in results_list]
 
     Cl_values, Cd_values, Cm_values = [], [], []
@@ -1365,9 +1303,6 @@ def extract_su2_polar_data(results_list):
 
 
 def save_polar_data_to_csv(filepath: str, aoa_data: list, cl_data: list, cd_data: list):
-    """
-    Saves aerodynamic polar data (AoA, Cl, Cd) to a CSV file.
-    """
     if not any(aoa_data):
         print("No successful simulation results to save.")
         return
