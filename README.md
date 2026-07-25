@@ -56,6 +56,11 @@ python -m pip install -r requirements.txt
 ```bash
 python main.py
 ```
+
+### Examples
+
+Check out the Examples folder for the validated cases and usage description.
+
 ### Cite As
 
 ```bash
