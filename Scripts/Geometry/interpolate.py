@@ -2,7 +2,7 @@ from scipy.interpolate import splprep, splev
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-import read_airfoil
+from Scripts.Geometry import read_airfoil
 
 
 class Interpolate:
@@ -19,22 +19,12 @@ class Interpolate:
         return unique_x, unique_y
 
     def refine_leading_edge(self, x, n_points):
-        """
-        Refine the leading edge using cosine interpolation for better resolution in curved regions.
-
-        Parameters:
-        - x: Input x-coordinates to refine.
-        - n_points: Number of points for refinement.
-
-        Returns:
-        - Refined x-coordinates with cosine spacing.
-        """
         beta = np.linspace(0, np.pi, n_points)  # Cosine spacing
         refined_x = 0.5 * (1 - np.cos(beta)) * np.max(x)
         return refined_x
 
     def airfoil_interpolate(self, n_points, meth, foil, airfoil_path, airfoil_name, int_path):
-        """Generate interpolated airfoil coordinates."""
+        #Generate interpolated airfoil coordinates.
         file_path = os.path.join(airfoil_path, airfoil_name)
         coordinates = list(zip(self.xcoords, self.ycoords))
         leading_edge_index = np.argmin(self.xcoords)
@@ -112,5 +102,4 @@ class Interpolate:
         return x_points, y_points
 
     def get_surface(self):
-        """Return the lower surface values."""
         return self.upper_surface, self.lower_surface

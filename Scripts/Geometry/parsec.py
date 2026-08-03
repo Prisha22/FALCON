@@ -2,7 +2,7 @@ import math
 import matplotlib.pyplot as plt
 from scipy.optimize import least_squares
 import numpy as np
-import read_airfoil
+from Scripts.Geometry import read_airfoil
 from scipy.linalg import solve
 
 class AirfoilNormalizer:

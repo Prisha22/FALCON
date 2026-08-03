@@ -5,7 +5,6 @@ import os
 import time
 from queue import Queue
 
-# PyQt6 Imports
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from PyQt6.QtCore import QTimer
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT

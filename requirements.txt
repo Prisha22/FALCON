@@ -1,10 +1,14 @@
 numpy
 PyQt6
-pandas
 scipy
 matplotlib
 pyxfoil
 gmsh
 Pillow
-pandas
 pyvista
+
+# Pinned: pandas 3.0.5's unsigned C extensions are blocked by Windows Smart
+# App Control ("An Application Control policy has blocked this file" on
+# importing pandas_datetime). 3.0.3 loads normally. Unpin once a newer pandas
+# build is trusted on the target machine.
+pandas==3.0.3

@@ -1,0 +1,15 @@
+# Solver binaries fetched by setup.ps1 (SU2, XFOIL, installers) -- hundreds of MB
+third_party/
+
+# Python environment
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Run output
+output/
+
+# Editors
+.idea/
+.vscode/

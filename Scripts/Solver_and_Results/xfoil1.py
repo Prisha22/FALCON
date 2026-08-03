@@ -99,7 +99,19 @@ def run_xfoil_logic(xfoil_path, int_path, airfoil_full_path,
 
     try:
         if M >= 1.0: raise ValueError(f"Mach {M} is too high for XFOIL (Max ~0.85).")
-        if not os.path.exists(xfoil_path): raise FileNotFoundError(f"XFoil exe not found: {xfoil_path}")
+
+        # Resolve through PATH first so a bare "xfoil.exe" works after setup.ps1;
+        # os.path.exists alone only ever checks the working directory. Resolving
+        # to an absolute path also survives the cwd changes made downstream.
+        resolved = shutil.which(xfoil_path)
+        if resolved is None and os.path.isfile(xfoil_path):
+            resolved = os.path.abspath(xfoil_path)
+        if resolved is None:
+            raise FileNotFoundError(
+                f"XFoil exe not found: {xfoil_path}. Either run setup.ps1 to put xfoil.exe "
+                f"on PATH, or enter the full path in the 'XFOIL Executable' field."
+            )
+        xfoil_path = resolved
 
         os.makedirs(int_path, exist_ok=True)
 

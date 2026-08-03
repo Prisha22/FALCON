@@ -19,7 +19,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 
 try:
-    from live_plotter import data_reader_thread
+    from Scripts.Solver_and_Results.live_plotter import data_reader_thread
 except ImportError:
     print("Warning: 'live_plotter' not found. Live plotting will be disabled.")
     data_reader_thread = None

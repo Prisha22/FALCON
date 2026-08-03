@@ -47,9 +47,45 @@ FALCON is an open-source Python-based GUI framework designed to facilitate airfo
 
 ### Installation
 
+#### Windows — automated
+
+From a fresh clone, run:
+
+```bash
+setup.bat
+```
+
+This creates the virtualenv, installs the Python packages, downloads SU2 and
+XFOIL into `third_party\`, and adds them to your user PATH. It is safe to
+re-run — anything already installed is detected and skipped.
+
+Microsoft MPI needs Administrator to install, so if you want MPI-parallel SU2,
+right-click `setup.bat` and choose **Run as administrator**. Without elevation
+the script installs everything else and tells you what it skipped.
+
+| Option | Effect |
+|---|---|
+| `setup.bat -SystemPath` | machine-wide PATH instead of per-user (needs admin) |
+| `setup.bat -ToolsDir D:\solvers` | install SU2/XFOIL somewhere other than `third_party\` |
+| `setup.bat -SkipMpi` | skip a component (`-SkipPython`, `-SkipSu2`, `-SkipXfoil` too) |
+| `setup.bat -RemoveFromPath` | undo the PATH entries |
+
+Open a **new** terminal afterwards so the PATH change is visible.
+
+> **Note on Windows 11 Smart App Control.** SU2 and XFOIL ship as unsigned
+> binaries. If Smart App Control is enforced, Windows blocks them from running
+> even though they installed correctly. The script detects this and reports it
+> at the end rather than leaving you with a silent failure.
+
+#### Manual / other platforms
+
 ```bash
 python -m pip install -r requirements.txt
 ```
+
+Then install SU2, XFOIL and MPI per the Pre-requisites above and put each
+executable's folder on PATH. FALCON locates `SU2_CFD`, `mpiexec` and `xfoil`
+through PATH, so no source paths need editing.
 
 ### Usage
 
