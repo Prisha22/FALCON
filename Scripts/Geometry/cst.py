@@ -2,7 +2,7 @@ import numpy as np
 from scipy.optimize import least_squares
 import matplotlib.pyplot as plt
 from math import factorial
-import read_airfoil
+from Scripts.Geometry import read_airfoil
 
 
 class AirfoilNormalizer:

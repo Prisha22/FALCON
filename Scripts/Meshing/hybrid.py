@@ -1,13 +1,11 @@
-#hybrid.py
 import gmsh
 from scipy.interpolate import splprep, splev
 import numpy as np
 
 
 def calculate_boundary_layer_thickness(Re, M, y_plus=1.0):
-    """
-    Calculate first cell thickness based on Reynolds number, Mach number, and target y+.
-    """
+    #Calculate first cell thickness based on Reynolds number, Mach number, and target y+.
+
     cf = (2 * np.log10(float(Re)) - .65) ** -2.3  # Skin friction coefficient
     tau_w = cf * .5 * 1.225 * (float(M) * 341.348) ** 2  # Wall shear stress
     u_star = np.sqrt(tau_w / 1.225)

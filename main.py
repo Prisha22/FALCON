@@ -1,5 +1,6 @@
 import sys
 import os
+import shutil
 import threading
 import multiprocessing
 import numpy as np
@@ -20,22 +21,21 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolb
 from matplotlib.figure import Figure
 import matplotlib.cm as cm
 
-from su2_analyzer import (
+from Scripts.Solver_and_Results.su2_analyzer import (
     SU2Runner, execute_su2_analysis_workflow, extract_su2_polar_data,
     SU2_INCOMPRESSIBLE_SETTINGS, SU2_COMPRESSIBLE_SETTINGS
 )
-import read_airfoil
-from parsec import Parsec
-from cst import CST
-from interpolate import Interpolate
-from hybrid import generate_hybrid
-from meshing import generate_mesh
-import xfoil1
-from live_plotter import LivePlotterWindow
+from Scripts.Geometry import read_airfoil
+from Scripts.Geometry.parsec import Parsec
+from Scripts.Geometry.cst import CST
+from Scripts.Geometry.interpolate import Interpolate
+from Scripts.Meshing.hybrid import generate_hybrid
+from Scripts.Meshing.meshing import generate_mesh
+from Scripts.Solver_and_Results import xfoil1
+from Scripts.Solver_and_Results.live_plotter import LivePlotterWindow
 
 
 class ConvergenceSettings(QGroupBox):
-    """Replicates the Convergence Settings UI block."""
 
     def __init__(self):
         super().__init__("Convergence Criteria")
@@ -56,12 +56,10 @@ class ConvergenceSettings(QGroupBox):
 
 
 class LoggerSignals(QObject):
-    """Signals for thread-safe logging."""
     write_log = pyqtSignal(str, str)
 
 
 class QtTextRedirector:
-    """Redirects stdout/stderr to the GUI log window."""
 
     def __init__(self, signal, tag="stdout"):
         self.signal = signal
@@ -340,7 +338,7 @@ class FalconApp(QMainWindow):
         input_group = QGroupBox("Input Parameters")
         form = QFormLayout(input_group)
 
-        self.xfoil_path_entry = QLineEdit("xfoil.exe")
+        self.xfoil_path_entry = QLineEdit(shutil.which("xfoil") or "xfoil.exe")
         browse_xf = QPushButton("...")
         browse_xf.clicked.connect(lambda: self.open_file(self.xfoil_path_entry))
         h_xf = QHBoxLayout()
@@ -745,7 +743,7 @@ class FalconApp(QMainWindow):
             else:
                 selected_file = "LowReIncomp.cfg"
 
-        cfg_path = os.path.join(self.script_dir, selected_file)
+        cfg_path = os.path.join(self.script_dir, "Configuration_Files", selected_file)
         print(f"Loading recommended settings from: {cfg_path}")
 
         self.loaded_cfg_settings = self.parse_su2_cfg(cfg_path)
