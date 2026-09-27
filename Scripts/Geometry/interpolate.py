@@ -67,6 +67,13 @@ class Interpolate:
         te_x = (upper_te_point[0] + lower_te_point[0]) / 2
         te_y = (upper_te_point[1] + lower_te_point[1]) / 2
 
+        # Close the TE at its mid-point by shearing each surface linearly in x. Moving only the end points
+        # leaves a notch in the last panel of open-TE airfoils that splines and panel codes follow.
+        upper_shift = (te_y - upper_te_point[1]) / upper_te_point[0]
+        lower_shift = (te_y - lower_te_point[1]) / lower_te_point[0]
+        upper_surface = [[x, y + upper_shift * x] for x, y in upper_surface]
+        lower_surface = [[x, y + lower_shift * x] for x, y in lower_surface]
+
         upper_surface[0] = [te_x, te_y]
         lower_surface[-1] = [te_x, te_y]
 

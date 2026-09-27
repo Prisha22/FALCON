@@ -22,15 +22,18 @@ from matplotlib.figure import Figure
 import matplotlib.cm as cm
 
 from Scripts.Solver_and_Results.su2_analyzer import (
-    SU2Runner, execute_su2_analysis_workflow, extract_su2_polar_data,
+    SU2Runner, execute_su2_analysis_workflow, extract_su2_polar_data, extract_surface_yplus,
     SU2_INCOMPRESSIBLE_SETTINGS, SU2_COMPRESSIBLE_SETTINGS
 )
 from Scripts.Geometry import read_airfoil
 from Scripts.Geometry.parsec import Parsec
 from Scripts.Geometry.cst import CST
 from Scripts.Geometry.interpolate import Interpolate
+# The "Generate Hybrid Mesh" button uses Scripts/Meshing/hybrid.py. An alternative two-pass mesher is kept in
+# Scripts/Meshing/hybrid_v2.py; import generate_hybrid from there to use it instead.
 from Scripts.Meshing.hybrid import generate_hybrid
 from Scripts.Meshing.meshing import generate_mesh
+from Scripts.Meshing.wall_spacing import measure_wall_spacing, design_yplus
 from Scripts.Solver_and_Results import xfoil1
 from Scripts.Solver_and_Results.live_plotter import LivePlotterWindow
 
@@ -499,10 +502,10 @@ class FalconApp(QMainWindow):
         layout.addWidget(self.su2_tabs)
 
         t_mesh = QWidget()
-        self.su2_tabs.addTab(t_mesh, "Meshing && Conditions")
+        self.su2_tabs.addTab(t_mesh, "Conditions && Meshing")
         mesh_layout = QGridLayout(t_mesh)
 
-        g_mesh = QGroupBox("1. Mesh Generation")
+        g_mesh = QGroupBox("2. Mesh Generation")
         gm_layout = QVBoxLayout(g_mesh)
         self.structured_mesh_button = QPushButton("Generate Structured Mesh")
         self.hybrid_mesh_button = QPushButton("Generate Hybrid Mesh")
@@ -516,14 +519,26 @@ class FalconApp(QMainWindow):
         h_yp.addWidget(QLabel("Target y+:"));
         h_yp.addWidget(self.yplus_entry)
 
+        # Two different numbers, both worth showing. Design y+ is read straight off the generated mesh and only
+        # confirms it carries the spacing it was asked for. Achieved y+ comes from the solution, because it needs
+        # the wall shear - the flat-plate correlation behind the target is optimistic near the suction peak.
+        self._design_yplus = None
+        self._achieved_yplus_max = None
+        self._mesh_timers = set()
+        self._achieved_yplus = None
+        self.achieved_yplus_label = QLabel()
+        self.achieved_yplus_label.setWordWrap(True)
+        self._refresh_yplus_label()
+
         self.show_gmsh_check = QCheckBox("Show Interactive Gmsh Window")
 
         gm_layout.addWidget(self.structured_mesh_button)
         gm_layout.addWidget(self.hybrid_mesh_button)
         gm_layout.addLayout(h_yp)
+        gm_layout.addWidget(self.achieved_yplus_label)
         gm_layout.addWidget(self.show_gmsh_check)
 
-        g_flow = QGroupBox("2. Flow Conditions")
+        g_flow = QGroupBox("1. Flow Conditions")
         gf_layout = QFormLayout(g_flow)
 
         self.su2_re_entry = QLineEdit("1000000")
@@ -542,8 +557,9 @@ class FalconApp(QMainWindow):
         load_btn.clicked.connect(self.load_recommended_settings)
         gf_layout.addRow(load_btn)
 
-        mesh_layout.addWidget(g_mesh, 0, 0)
-        mesh_layout.addWidget(g_flow, 0, 1)
+        # Conditions on the left, mesh generation on the right: Re, Mach and y+ set the wall spacing.
+        mesh_layout.addWidget(g_flow, 0, 0)
+        mesh_layout.addWidget(g_mesh, 0, 1)
 
         t_setup = QWidget()
         self.su2_tabs.addTab(t_setup, "Solver Setup && Run")
@@ -855,6 +871,25 @@ class FalconApp(QMainWindow):
 
             p = multiprocessing.Process(target=func, args=args, kwargs=kwargs)
             p.start()
+
+            # Read the design y+ off the mesh once gmsh has exited. Waiting on the process rather than on the
+            # file avoids reading a partly written mesh, and with the interactive window on it also means the
+            # file has already been through its NMARK rewrite.
+            mesh_path = os.path.join(os.getcwd(), "airfoil.su2")
+            timer = QTimer(self)
+
+            def check_finished():
+                if p.is_alive():
+                    return
+                timer.stop()
+                self._mesh_timers.discard(timer)
+                if os.path.exists(mesh_path):
+                    self.update_design_yplus(mesh_path)
+
+            timer.timeout.connect(check_finished)
+            timer.start(1000)
+            self._mesh_timers.add(timer)
+
             QMessageBox.information(self, "Meshing", "Gmsh started in background.")
             self.su2_analysis_button.setEnabled(True)
         except Exception as e:
@@ -933,7 +968,61 @@ class FalconApp(QMainWindow):
         win.show()
         self.live_windows.append(win)
 
+    def _refresh_yplus_label(self):
+        design = self._design_yplus or "mesh not generated yet"
+        achieved = self._achieved_yplus or "run SU2 to measure"
+        self.achieved_yplus_label.setText(f"Design y+ (mesh): {design}\nAchieved y+ (solution): {achieved}")
+        warn = isinstance(self._achieved_yplus, str) and self._achieved_yplus.startswith("max") and \
+            self._achieved_yplus_max is not None and self._achieved_yplus_max > 5.0
+        self.achieved_yplus_label.setStyleSheet("color: #ff8f5a;" if warn else "color: #999999;")
+
+    def update_design_yplus(self, mesh_path):
+        """Wall spacing read back off the generated mesh. Needs no solver."""
+        try:
+            coords, spacing = measure_wall_spacing(mesh_path)
+        except Exception as e:
+            print(f"[y+] Could not measure wall spacing: {e}")
+            return
+        if spacing is None:
+            return
+        valid = np.isfinite(spacing)
+        if not np.any(valid):
+            return
+        try:
+            re_val = float(self.su2_re_entry.text())
+            target = float(self.yplus_entry.text())
+        except ValueError:
+            return
+        yp = design_yplus(spacing[valid], re_val)
+        self._design_yplus = (f"median {np.median(yp):.3f} (range {yp.min():.3f}-{yp.max():.3f}) "
+                              f"against target {target:g}, first cell {np.median(spacing[valid]):.3e}")
+        self._refresh_yplus_label()
+        print(f"[y+] design, from the mesh: {self._design_yplus}")
+
+    def update_achieved_yplus(self, results):
+        """Worst-case achieved y+ across the AoA sweep, read from each run's surface CSV."""
+        per_aoa = [(aoa, extract_surface_yplus(surface)) for aoa, _, _, surface in results]
+        measured = [(aoa, yp) for aoa, yp in per_aoa if yp]
+
+        if not measured:
+            self._achieved_yplus = "unavailable (no surface VTU with Y_Plus)"
+            self._achieved_yplus_max = None
+            self._refresh_yplus_label()
+            return
+
+        worst_aoa, worst = max(measured, key=lambda item: item[1]['max'])
+        self._achieved_yplus_max = worst['max']
+        # Wall-resolved turbulence models want the first cell inside the viscous sublayer.
+        self._achieved_yplus = (f"max {worst['max']:.2f} at AoA {worst_aoa:.2f}, "
+                                f"99th pct {worst['p99']:.2f}, median {worst['median']:.2f}")
+        self._refresh_yplus_label()
+
+        for aoa, yp in measured:
+            print(f"[y+] AoA {aoa:.2f}: max {yp['max']:.2f}, 99th pct {yp['p99']:.2f}, "
+                  f"median {yp['median']:.2f}")
+
     def plot_su2_results(self, results):
+        self.update_achieved_yplus(results)
         self.su2_polar_canv.figure.clear()
         ax = self.su2_polar_canv.figure.add_subplot(111)
         ax.set_facecolor('#2b2b2b')
