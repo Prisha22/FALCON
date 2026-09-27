@@ -41,9 +41,12 @@ FALCON is an open-source Python-based GUI framework designed to facilitate airfo
     - numpy
     - matplotlib
     - scipy
-    - tkinter
+    - PyQt6
     - pandas
     - gmsh
+    - Pillow
+    - pyxfoil
+    - pyvista
 
 ### Installation
 
