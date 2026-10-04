@@ -58,8 +58,10 @@ def generate_hybrid(upper_surface, lower_surface, Re, M, y_plus=1.0, show_graphi
     c6 = gmsh.model.geo.addCircleArc(pc4, pc, pc1)
     circle_loop = gmsh.model.geo.addCurveLoop([c8, c9, c5, c6])
 
-    af_lower_points[-1] = af_upper_points[0]
-    af_lower_points[0] = af_upper_points[-1]
+    # Share the upper surface's LE and TE points by adding them to the ends. Overwriting af_lower_points[0] and [-1]
+    # instead dropped two real lower-surface points and left a corner at the nose (1.2e-3 c off the wall on E387).
+    af_lower_points.insert(0, af_upper_points[-1])
+    af_lower_points.append(af_upper_points[0])
 
     af_upper = gmsh.model.geo.addSpline(af_upper_points)
     af_lower = gmsh.model.geo.addSpline(af_lower_points)
@@ -103,7 +105,8 @@ def generate_hybrid(upper_surface, lower_surface, Re, M, y_plus=1.0, show_graphi
     gmsh.model.mesh.field.setNumber(box_field_id, "Thickness", 7)
 
     box_field_id1 = gmsh.model.mesh.field.add("Box")
-    gmsh.model.mesh.field.setNumber(box_field_id1, "VIn", 0.003)
+    # Cell count ~ 57k + 12.5 / VIn**2, nearly airfoil independent: 0.0053 -> ~500k, 0.003 -> ~1.44M
+    gmsh.model.mesh.field.setNumber(box_field_id1, "VIn", 0.0053)
     gmsh.model.mesh.field.setNumber(box_field_id1, "VOut", 0.8)
     gmsh.model.mesh.field.setNumber(box_field_id1, "XMin", -0.7)
     gmsh.model.mesh.field.setNumber(box_field_id1, "XMax", 1.7)
@@ -112,7 +115,9 @@ def generate_hybrid(upper_surface, lower_surface, Re, M, y_plus=1.0, show_graphi
     gmsh.model.mesh.field.setNumber(box_field_id1, "Thickness", 10)
 
     min_field_id = gmsh.model.mesh.field.add("Min")
-    gmsh.model.mesh.field.setNumbers(min_field_id, "FieldsList", [box_field_id, box_field_id1, boundary_layer_field_id])
+    # The BoundaryLayer field is applied through setAsBoundaryLayer only. Listing it here as well lets its wall
+    # sizing drive the whole inner disk, which stretches triangles into radial slivers (min angle 0.085 deg).
+    gmsh.model.mesh.field.setNumbers(min_field_id, "FieldsList", [box_field_id, box_field_id1])
 
 
     gmsh.model.addPhysicalGroup(1, [af_upper, af_lower], name='Airfoil')

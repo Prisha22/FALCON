@@ -3,7 +3,12 @@ PyQt6
 scipy
 matplotlib
 pyxfoil
-gmsh
+
+# Pinned: the meshers depend on gmsh's meshing behaviour, not just its API. Under 4.15.2 a BoundaryLayer field
+# listed in a background Min field silently left the hybrid mesh's inner region unrefined, and the transfinite
+# "Bump" law is calibrated at run time against the installed version. Re-verify the mesh quality checks before
+# moving to a newer gmsh.
+gmsh==4.15.2
 Pillow
 pyvista
 

@@ -1,3 +1,4 @@
+#meshing.py
 import gmsh
 from scipy.interpolate import splprep, splev
 import numpy as np
@@ -5,13 +6,15 @@ import math
 
 
 def calculate_boundary_layer_thickness(Re, M, y_plus=1.0):
-    #Calculate first cell thickness based on Reynolds number, Mach number, and target y+.
+    """
+    Calculate first cell thickness for a target y+ on a unit chord.
 
+    The SU2 config sets MU_CONSTANT = rho * U * c / Re with REYNOLDS_LENGTH = 1, so nu = U * c / Re and
+    y = y+ * nu / u_tau = y+ * c / (Re * sqrt(cf / 2)) -- it depends on Re, not on Mach or on any assumed
+    fluid properties. M is kept for call compatibility.
+    """
     cf = (2 * np.log10(float(Re)) - .65) ** -2.3  # Skin friction coefficient
-    tau_w = cf * .5 * 1.225 * (float(M) * 341.348) ** 2  # Wall shear stress
-    u_star = np.sqrt(tau_w / 1.225)
-    y = y_plus * (1.813e-5) / (1.225 * u_star)  # First cell thickness
-    return y
+    return y_plus / (float(Re) * np.sqrt(cf / 2))  # First cell thickness
 
 
 def generate_mesh(xcoords, ycoords, Re, M, y_plus=1.0, show_graphics: bool = True, output_format: str = '.su2',
@@ -23,24 +26,40 @@ def generate_mesh(xcoords, ycoords, Re, M, y_plus=1.0, show_graphics: bool = Tru
     trailing_edge_thickness = 1e-3
     inlet_radius = 15
     downstream_distance = 25
-    boundary_growth_rate = 1.2
 
+    # --- Logic to dynamically calculate the number of layers (n_volume) ---
+    # 1. Set a fixed, reasonable growth rate for the boundary layer
+    boundary_growth_rate = 1.05
+
+    # 2. Calculate the first cell thickness based on the y+ input
     first_cell_thickness = calculate_boundary_layer_thickness(Re, M, y_plus=y_plus)
     print(f"Target y+: {y_plus} -> Calculated First Cell Thickness: {first_cell_thickness:.4e} m")
 
+    # 3. Calculate the required number of layers to fill the domain thickness
+    # This uses the formula for the sum of a geometric series to find 'n'
     domain_thickness = inlet_radius
     # Ensure the argument to log is positive
     log_arg = (domain_thickness * (boundary_growth_rate - 1) / first_cell_thickness) + 1
     if log_arg > 0:
-        n_volume = int(math.log(log_arg) / math.log(boundary_growth_rate))
+        # The series gives a CELL count; setTransfiniteCurve takes a NODE count, and rounding down would make the
+        # wall cell larger than the target. Round the cells up, then add the node.
+        n_volume = math.ceil(math.log(log_arg) / math.log(boundary_growth_rate)) + 1
     else:
         n_volume = 120  # Fallback for extreme values
+    # What gmsh will actually lay down: Progression over `domain_thickness` with n_volume nodes at this ratio.
+    realised_first_cell = domain_thickness * (boundary_growth_rate - 1) / (
+        boundary_growth_rate ** (n_volume - 1) - 1)
+    cf_check = (2 * np.log10(float(Re)) - .65) ** -2.3
     print(f"Using Growth Rate: {boundary_growth_rate} -> Calculated Layers (n_volume): {n_volume}")
+    print(f"Target y+ {y_plus:g} -> wall cell {first_cell_thickness:.4e}; mesh lays down "
+          f"{realised_first_cell:.4e} -> design y+ "
+          f"{realised_first_cell * float(Re) * np.sqrt(cf_check / 2):.3f} "
+          f"(the y+ the flow produces needs a solution, and runs several times higher near the suction peak)")
     # --- End of fix ---
 
-    n_airfoil = 401
-    n_wake = 301
-    n_leading_edge = 180
+    n_airfoil = 601
+    n_wake = 501
+    n_leading_edge = 380
     leading_edge_length = .1
 
     center = (length_le, 0, 0)
@@ -136,7 +155,7 @@ def generate_mesh(xcoords, ycoords, Re, M, y_plus=1.0, show_graphics: bool = Tru
     model.mesh.setTransfiniteSurface(inlet_section)
     model.mesh.setRecombine(2, inlet_section)
     model.mesh.setTransfiniteCurve(topTe_afTe, n_volume, "Progression", -boundary_growth_rate)
-    te_growth_upper = 1.015
+    te_growth_upper = 1.0
     model.mesh.setTransfiniteCurve(af_upper, n_airfoil, "Progression", -te_growth_upper)
     model.mesh.setTransfiniteCurve(top_line, n_airfoil, "Progression", -te_growth_upper)
     model.mesh.setTransfiniteSurface(top_section)

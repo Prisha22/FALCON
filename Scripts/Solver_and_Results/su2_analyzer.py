@@ -602,7 +602,13 @@ def prepare_su2_config(
             "RMS_ENERGY, LIFT, DRAG, MOMENT"
         )
 
-    output_files = gui_settings.get('OUTPUT_FILES', '(RESTART, TECPLOT_ASCII, PARAVIEW, SURFACE_CSV)')
+    # SURFACE_PARAVIEW carries the achieved y+. SU2 8.5.0 writes the surface CSV from a fixed field set and
+    # ignores Y_PLUS whether it is asked for through VOLUME_OUTPUT, SCREEN_OUTPUT or HISTORY_OUTPUT (checked
+    # against the binary: there is no SURFACE_OUTPUT_FIELDS option in this version). The surface VTU carries
+    # Y_Plus on exactly the wall nodes, so that is where the achieved y+ is read from.
+    default_output_files = ('(RESTART, TECPLOT_ASCII, PARAVIEW, SURFACE_CSV)' if 'EULER' in solver
+                            else '(RESTART, TECPLOT_ASCII, PARAVIEW, SURFACE_CSV, SURFACE_PARAVIEW)')
+    output_files = gui_settings.get('OUTPUT_FILES', default_output_files)
 
     config_lines.extend([
         "% ------------------------- INPUT/OUTPUT INFORMATION --------------------------%",
@@ -648,8 +654,9 @@ def prepare_su2_config(
     config_lines.extend([
         f"SCREEN_OUTPUT = ({screen_output})",
         f"HISTORY_OUTPUT = {history_output}",
-        ""
     ])
+
+    config_lines.append("")
 
     final_lines = []
     prev_empty = False
@@ -1237,6 +1244,16 @@ def execute_su2_analysis_workflow(
 
                     if surface and os.path.exists(surface):
                         save_cp_vs_chord_plot(aoa, aoa_run_dir)
+                        yplus = extract_surface_yplus(surface)
+                        if yplus:
+                            print(f"[Post] AoA {aoa:.2f} achieved y+: max {yplus['max']:.2f}, "
+                                  f"99th pct {yplus['p99']:.2f}, median {yplus['median']:.2f} "
+                                  f"over {yplus['n']} surface points")
+                            if yplus['max'] > 5.0:
+                                print("[Post] WARNING: max y+ above 5 - the wall spacing is coarser than the "
+                                      "low-Re wall treatment assumes; re-mesh at a smaller target y+.")
+                        else:
+                            print("[Post] No surface VTU with Y_Plus, cannot report achieved y+.")
                     else:
                         print(f"[Post] Surface CSV missing for AoA {aoa:.2f}, skipping Cp plot.")
 
@@ -1267,6 +1284,45 @@ def execute_su2_analysis_workflow(
     if gui_update_callback:
         gui_update_callback(all_sim_results)
     return all_sim_results
+
+
+def extract_surface_yplus(surface_path):
+    """Achieved y+ over the airfoil, read from the surface VTU SU2 writes under SURFACE_PARAVIEW.
+
+    Takes either the surface VTU or the surface CSV of the same run (the CSV is what the workflow carries
+    around, and the VTU sits beside it under the same SURFACE_FILENAME). Returns the max, median and 99th
+    percentile, or None when the run has no surface VTU - an inviscid solver, or a run made before
+    SURFACE_PARAVIEW was requested.
+    """
+    if not surface_path:
+        return None
+
+    candidate = os.path.splitext(surface_path)[0] + '.vtu'
+    if not os.path.exists(candidate):
+        matches = glob.glob(os.path.join(os.path.dirname(surface_path) or '.', 'surf_aoa_*.vtu'))
+        if not matches:
+            return None
+        candidate = max(matches, key=os.path.getmtime)
+
+    try:
+        mesh = pv.read(candidate)
+        name = next((k for k in mesh.point_data.keys()
+                     if k.strip().upper().replace(' ', '_') == 'Y_PLUS'), None)
+        if name is None:
+            return None
+        values = np.asarray(mesh.point_data[name], dtype=float)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            return None
+        return {
+            'max': float(np.max(values)),
+            'median': float(np.median(values)),
+            'p99': float(np.percentile(values, 99)),
+            'n': int(values.size),
+        }
+    except Exception as e:
+        print(f"Could not read y+ from {candidate}: {e}")
+        return None
 
 
 def extract_su2_polar_data(results_list):
