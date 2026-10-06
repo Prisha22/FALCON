@@ -23,7 +23,7 @@ import matplotlib.cm as cm
 
 from Scripts.Solver_and_Results.su2_analyzer import (
     SU2Runner, execute_su2_analysis_workflow, extract_su2_polar_data, extract_surface_yplus,
-    SU2_INCOMPRESSIBLE_SETTINGS, SU2_COMPRESSIBLE_SETTINGS
+    SU2_INCOMPRESSIBLE_SETTINGS, SU2_COMPRESSIBLE_SETTINGS, template_passthrough
 )
 from Scripts.Geometry import read_airfoil
 from Scripts.Geometry.parsec import Parsec
@@ -101,6 +101,7 @@ class FalconApp(QMainWindow):
         self.live_windows = []
         self.su2_setting_widgets = {}
         self.loaded_cfg_settings = {}
+        self.template_extras = {}
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -659,6 +660,9 @@ class FalconApp(QMainWindow):
             if child.widget(): child.widget().deleteLater()
 
         self.su2_setting_widgets = {}
+        # Template values without a widget belong to the template the panel was loaded from; rebuilding the panel
+        # (a regime change) drops them.
+        self.template_extras = {}
         regime = self.flow_regime_combo.currentText()
         settings = SU2_INCOMPRESSIBLE_SETTINGS if regime == "Incompressible" else SU2_COMPRESSIBLE_SETTINGS
 
@@ -784,6 +788,7 @@ class FalconApp(QMainWindow):
             return
 
         print("Applying loaded settings to GUI...")
+        used = set()
 
         for key, widget in self.su2_setting_widgets.items():
             ukey = key.upper()
@@ -791,6 +796,7 @@ class FalconApp(QMainWindow):
                 continue
 
             value = self.loaded_cfg_settings[ukey]
+            used.add(ukey)
 
             try:
                 if ukey == "CONV_NUM_METHOD_FLOW":
@@ -813,8 +819,29 @@ class FalconApp(QMainWindow):
                     if not applied:
                         print(f"  Warning: Failed to apply {ukey}: {value}")
                     continue
+
+                if isinstance(widget, QComboBox):
+                    if widget.findText(value) >= 0:
+                        widget.setCurrentText(value)
+                        print(f"  Applied {ukey} = {value}")
+                    else:
+                        print(f"  Warning: {ukey} = {value} is not an option here, kept {widget.currentText()}")
+                elif isinstance(widget, QLineEdit):
+                    widget.setText(value)
+                    print(f"  Applied {ukey} = {value}")
             except Exception as e:
                 print(f"  Error applying {ukey}: {e}")
+
+        # The transonic template counts physical time steps (TIME_ITER), the others iterations (ITER).
+        iterations = self.loaded_cfg_settings.get("ITER") or self.loaded_cfg_settings.get("TIME_ITER")
+        if iterations:
+            self.conv_settings.max_iter_input.setText(iterations)
+        if "CONV_RESIDUAL_MINVAL" in self.loaded_cfg_settings:
+            self.conv_settings.res_min_input.setText(self.loaded_cfg_settings["CONV_RESIDUAL_MINVAL"])
+        used.update({"ITER", "TIME_ITER", "EXT_ITER", "CONV_RESIDUAL_MINVAL"})
+
+        self.template_extras = template_passthrough(self.loaded_cfg_settings, used)
+        print(f"  Passed to the config writer without a widget: {', '.join(sorted(self.template_extras))}")
 
     def parse_su2_cfg(self, file_path):
         settings = {}
@@ -895,11 +922,10 @@ class FalconApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
-    def run_su2_workflow_in_thread(self):
-        self.su2_analysis_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-
-        gui_settings = {}
+    def collect_su2_settings(self):
+        """The settings handed to prepare_su2_config: the loaded template's values that have no widget, then every
+        widget (so the user's edits win), then the convergence fields."""
+        gui_settings = dict(self.template_extras)
         for k, w in self.su2_setting_widgets.items():
             if isinstance(w, QComboBox):
                 gui_settings[k] = w.currentText()
@@ -910,6 +936,13 @@ class FalconApp(QMainWindow):
         gui_settings['CONV_RESIDUAL_MINVAL'] = res
         gui_settings['ITER'] = iter_val
         gui_settings['EXT_ITER'] = iter_val
+        return gui_settings
+
+    def run_su2_workflow_in_thread(self):
+        self.su2_analysis_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+
+        gui_settings = self.collect_su2_settings()
 
         try:
             params = {
