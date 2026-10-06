@@ -53,6 +53,27 @@ SU2_COMPRESSIBLE_SETTINGS = {
     'KIND_TRANS_MODEL': ['NONE', 'LM'],
 }
 
+# Template keys that describe the case, its markers or its output files rather than the numerical method. The flow
+# conditions come from the GUI inputs and prepare_su2_config writes the rest itself; in particular it adds the
+# surface VTU that carries the achieved y+, which the templates' OUTPUT_FILES lack.
+TEMPLATE_CASE_KEYS = {
+    "MATH_PROBLEM", "RESTART_SOL", "RESTART_ITER", "MACH_NUMBER", "AOA", "REYNOLDS_NUMBER", "REYNOLDS_LENGTH",
+    "INC_DENSITY_INIT", "INC_VELOCITY_INIT", "INC_NONDIM", "INC_DENSITY_REF", "VISCOSITY_MODEL", "MU_CONSTANT",
+    "REF_ORIGIN_MOMENT_X", "REF_ORIGIN_MOMENT_Y", "REF_ORIGIN_MOMENT_Z", "REF_LENGTH",
+    "MESH_FILENAME", "MESH_FORMAT", "MESH_OUT_FILENAME", "SOLUTION_FILENAME", "SOLUTION_ADJ_FILENAME",
+    "TABULAR_FORMAT", "CONV_FILENAME", "RESTART_FILENAME", "RESTART_ADJ_FILENAME", "VOLUME_FILENAME",
+    "VOLUME_ADJ_FILENAME", "GRAD_OBJFUNC_FILENAME", "SURFACE_FILENAME", "SURFACE_ADJ_FILENAME",
+    "OUTPUT_FILES", "SCREEN_OUTPUT", "HISTORY_OUTPUT",
+}
+
+
+def template_passthrough(template, applied):
+    """Template settings that have no GUI widget but still reach prepare_su2_config (turbulence intensity, LM
+    options, JST coefficients, time step, ...): everything not already applied to a widget and not a case key."""
+    return {k: v for k, v in template.items()
+            if k not in applied and k not in TEMPLATE_CASE_KEYS and not k.startswith("MARKER_")}
+
+
 SU2_INCOMPRESSIBLE_SETTINGS = {
     'SOLVER': ['INC_RANS', 'INC_NAVIER_STOKES', 'INC_EULER'],
     'KIND_TURB_MODEL': ['SST', 'SA', 'SA_NEG', 'NONE'],
@@ -303,11 +324,12 @@ def prepare_su2_config(
         sound_speed = np.sqrt(gamma * r_gas * ssl_temp)
         velocity_magnitude = mach * sound_speed
     else:
-        freestream_temp = gui_settings.get(
+        # Template values arrive as text.
+        freestream_temp = float(gui_settings.get(
             'FREESTREAM_TEMPERATURE',
             293.0 if (is_transonic or is_supersonic) else 288.15
-        )
-        freestream_pres = gui_settings.get('FREESTREAM_PRESSURE', 101325.0)
+        ))
+        freestream_pres = float(gui_settings.get('FREESTREAM_PRESSURE', 101325.0))
         freestream_dens = freestream_pres / (r_gas * freestream_temp)
         sound_speed = np.sqrt(gamma * r_gas * freestream_temp)
         velocity_magnitude = mach * sound_speed
