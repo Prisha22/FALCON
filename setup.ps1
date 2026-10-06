@@ -274,7 +274,7 @@ if (-not $SkipPython) {
         if ($launcher) { $bootstrap = 'py' } else {
             $sys = Get-Command python -ErrorAction SilentlyContinue
             if (-not $sys) {
-                Write-Fail 'No Python found. Install Python 3.12+ from https://python.org and re-run.'
+                Write-Fail 'No Python found. Install Python 3.11+ from https://python.org and re-run.'
                 exit 1
             }
             $bootstrap = 'python'

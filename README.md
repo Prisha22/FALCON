@@ -16,7 +16,7 @@ FALCON is an open-source Python-based GUI framework designed to facilitate airfo
 
 * Airfoil parametrization using CST and PARSEC techniques.
 
-* Embedded XFOIL for low-fidelity aerodynamic analysis.
+* XFOIL (installed separately and run as an external executable) for low-fidelity aerodynamic analysis.
 
 * Automated meshing using GMSH
 
