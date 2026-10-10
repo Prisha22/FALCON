@@ -36,15 +36,18 @@ def main():
     parser.add_argument("--rerun-failed", action="store_true", help="run failed, timed-out and crashed cases again")
     parser.add_argument("--dry-run", action="store_true",
                         help="SU2 cases: write the mesh and configuration files but do not start SU2")
+    parser.add_argument("--su2-config", help="SU2 cases: use this configuration file's numerical settings for every "
+                                             "case instead of the automatically selected ones")
+    parser.add_argument("--max-iter", type=int, help="cap on ITER when --su2-config is used")
     args = parser.parse_args()
 
     cases = load_cases(args.cases)
     print(f"{len(cases)} case(s) from {args.cases}")
     stats = run_batch(cases, args.out, args.airfoils, xfoil_path=args.xfoil, cores=args.cores,
                       workers=args.workers, xfoil_timeout=args.xfoil_timeout, su2_timeout=args.su2_timeout,
-                      rerun_failed=args.rerun_failed, dry_run=args.dry_run)
+                      rerun_failed=args.rerun_failed, dry_run=args.dry_run, su2_config=args.su2_config,
+                      max_iter=args.max_iter)
     print(json.dumps(stats, indent=1))
-
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()

@@ -103,8 +103,54 @@ def load_cases(path):
 
 def _read_template(name):
     """Key/value pairs of a Configuration_Files template, parsed like FalconApp.parse_su2_cfg."""
+    return _read_cfg(os.path.join(TEMPLATE_DIR, name))
+
+
+# Lines of a user-supplied SU2 configuration that describe the case rather than the numerics; they are rewritten for
+# every case and angle, everything else is kept verbatim.
+CASE_LINES = ("MACH_NUMBER", "AOA", "REYNOLDS_NUMBER", "MESH_FILENAME", "CONV_FILENAME", "VOLUME_FILENAME",
+              "SURFACE_FILENAME", "RESTART_FILENAME", "OUTPUT_FILES")
+
+
+def write_config_from_file(source, run_dir, alpha, reynolds, mach, max_iter=None):
+    """
+    Write an SU2 configuration for one angle from a user-supplied configuration: the numerical settings are copied
+    verbatim and only the case lines (flow conditions, file names, output files) are replaced. max_iter, if given,
+    caps ITER. Returns the written path and the parsed settings that apply to the run.
+    """
+    lines = open(source).read().splitlines()
+    values = {
+        "MACH_NUMBER": f"{mach:.6f}", "AOA": f"{alpha:.6f}", "REYNOLDS_NUMBER": f"{reynolds:.0f}",
+        "MESH_FILENAME": "airfoil.su2", "CONV_FILENAME": f"history_aoa_{alpha:.2f}",
+        "VOLUME_FILENAME": f"flow_aoa_{alpha:.2f}", "SURFACE_FILENAME": f"surf_aoa_{alpha:.2f}",
+        "RESTART_FILENAME": "restart_flow.dat",
+        # The surface VTU carries the achieved y+ (see prepare_su2_config).
+        "OUTPUT_FILES": "(RESTART, TECPLOT_ASCII, PARAVIEW, SURFACE_CSV, SURFACE_PARAVIEW)",
+    }
+    settings = _read_cfg(source)
+    if max_iter and int(float(settings.get("ITER", max_iter))) > max_iter:
+        values["ITER"] = str(int(max_iter))
+    out, seen = [], set()
+    for line in lines:
+        m = regex.match(r"^\s*([A-Za-z0-9_]+)\s*=", line)
+        key = m.group(1).upper() if m else None
+        if key in values:
+            out.append(f"{key}= {values[key]}")
+            seen.add(key)
+        else:
+            out.append(line)
+    out += [f"{k}= {v}" for k, v in values.items() if k not in seen]
+    path = os.path.join(run_dir, f"config_aoa_{alpha:.2f}.cfg")
+    with open(path, "w") as f:
+        f.write("\n".join(out) + "\n")
+    settings.update({k: v for k, v in values.items() if k == "ITER"})
+    return path, settings
+
+
+def _read_cfg(path):
+    """Key/value pairs of an SU2 configuration file, parsed like FalconApp.parse_su2_cfg."""
     settings = {}
-    with open(os.path.join(TEMPLATE_DIR, name)) as f:
+    with open(path) as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("%"):
@@ -282,13 +328,20 @@ def read_history(history_path, settings):
     return out
 
 
-def run_su2_case(case, case_dir, airfoil_dir, cores, timeout, dry_run=False):
+def run_su2_case(case, case_dir, airfoil_dir, cores, timeout, dry_run=False, su2_config=None, max_iter=None):
+    """
+    Mesh the case and run SU2 for each angle. With su2_config, every angle uses that configuration's numerical
+    settings verbatim (write_config_from_file); otherwise the settings are the ones the GUI selects automatically.
+    """
     from Scripts.Meshing.meshing import generate_mesh
     from Scripts.Meshing.wall_spacing import design_yplus, measure_wall_spacing
     from Scripts.Solver_and_Results.su2_analyzer import SU2Runner, extract_surface_yplus, prepare_su2_config
 
     x, y, geometry = prepare_geometry(case, airfoil_dir, case_dir)
-    regime, template, settings = gui_recommended_settings(case.mach, case.reynolds)
+    if su2_config:
+        regime, template, settings = "from file", os.path.abspath(su2_config), _read_cfg(su2_config)
+    else:
+        regime, template, settings = gui_recommended_settings(case.mach, case.reynolds)
 
     # The mesher writes airfoil.su2 into the working directory, as it does from the GUI.
     os.chdir(case_dir)
@@ -309,7 +362,10 @@ def run_su2_case(case, case_dir, airfoil_dir, cores, timeout, dry_run=False):
         run_dir = os.path.join(case_dir, f"AoA_{alpha:.2f}")
         os.makedirs(run_dir, exist_ok=True)
         shutil.copy2(mesh_path, os.path.join(run_dir, "airfoil.su2"))
-        config = prepare_su2_config(run_dir, settings, "airfoil.su2", regime, alpha, case.reynolds, case.mach)
+        if su2_config:
+            config, settings = write_config_from_file(su2_config, run_dir, alpha, case.reynolds, case.mach, max_iter)
+        else:
+            config = prepare_su2_config(run_dir, settings, "airfoil.su2", regime, alpha, case.reynolds, case.mach)
         if dry_run:
             points.append({"alpha": alpha, "converged": False, "state": "dry_run", "config": config})
             continue
@@ -386,7 +442,8 @@ def _mark(out_dir, case, state, message):
     _write_status(case_dir, record)
 
 
-def _case_process(case_fields, out_dir, airfoil_dir, xfoil_path, cores, timeout, dry_run=False):
+def _case_process(case_fields, out_dir, airfoil_dir, xfoil_path, cores, timeout, dry_run=False, su2_config=None,
+                  max_iter=None):
     """Entry point of the child process that runs one case."""
     case = Case(**case_fields)
     case_dir = os.path.join(out_dir, case.case_id)
@@ -403,7 +460,7 @@ def _case_process(case_fields, out_dir, airfoil_dir, xfoil_path, cores, timeout,
         if case.solver == "xfoil":
             result = run_xfoil_case(case, case_dir, airfoil_dir, xfoil_path, timeout)
         else:
-            result = run_su2_case(case, case_dir, airfoil_dir, cores, timeout, dry_run)
+            result = run_su2_case(case, case_dir, airfoil_dir, cores, timeout, dry_run, su2_config, max_iter)
         record.update(result)
         n_ok = sum(1 for p in result["points"] if p["converged"])
         if result.get("dry_run"):
@@ -471,14 +528,15 @@ def _run_pool(cases, workers, child_args, time_limit, out_dir, log):
 
 
 def run_batch(cases, out_dir, airfoil_dir, xfoil_path=None, cores=8, workers=4, xfoil_timeout=180.0,
-              su2_timeout=4 * 3600.0, rerun_failed=False, dry_run=False, log=print):
+              su2_timeout=4 * 3600.0, rerun_failed=False, dry_run=False, su2_config=None, max_iter=None, log=print):
     """
     Run every case that has not finished yet and write the summaries.
 
     XFOIL cases run `workers` at a time on one core each; SU2 cases run one at a time on `cores` MPI ranks.
     xfoil_timeout limits one XFOIL sweep, su2_timeout one SU2 angle; the parent kills any case that outlives its
     limit plus a margin for the geometry fit and meshing. dry_run stops SU2 cases after writing the mesh and
-    configuration files. Returns the statistics written to batch_summary.json.
+    configuration files. su2_config replaces the automatically selected SU2 settings with those of a given
+    configuration file (max_iter caps its ITER). Returns the statistics written to batch_summary.json.
     """
     out_dir = os.path.abspath(out_dir)
     airfoil_dir = os.path.abspath(airfoil_dir)
@@ -506,7 +564,8 @@ def run_batch(cases, out_dir, airfoil_dir, xfoil_path=None, cores=8, workers=4, 
                   lambda c: xfoil_timeout + 300.0, out_dir, log)
     if su2_cases:
         _run_pool(su2_cases, 1,
-                  lambda c: (asdict(c), out_dir, airfoil_dir, xfoil_path, cores, su2_timeout, dry_run),
+                  lambda c: (asdict(c), out_dir, airfoil_dir, xfoil_path, cores, su2_timeout, dry_run,
+                             os.path.abspath(su2_config) if su2_config else None, max_iter),
                   lambda c: su2_timeout * len(c.alphas()) + 1800.0, out_dir, log)
 
     return write_summary(cases, out_dir)
