@@ -11,6 +11,8 @@ pyxfoil
 gmsh==4.15.2
 Pillow
 pyvista
+# dataset.xlsx (one sheet per Reynolds number) from the Dataset Generation tab
+openpyxl
 
 # Pinned: pandas 3.0.5's unsigned C extensions are blocked by Windows Smart
 # App Control ("An Application Control policy has blocked this file" on

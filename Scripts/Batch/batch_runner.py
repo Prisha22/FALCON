@@ -31,7 +31,7 @@ TEMPLATE_DIR = os.path.join(REPO_ROOT, "Configuration_Files")
 
 SOLVERS = ("xfoil", "su2")
 REQUIRED_COLUMNS = ("airfoil", "solver", "re", "mach", "alpha_min", "alpha_max", "alpha_step")
-FINAL_STATES = ("converged", "partial", "failed", "timeout", "crashed")
+FINAL_STATES = ("converged", "partial", "failed", "timeout", "crashed")  # "stopped" is not final: a re-run resumes it
 RETRY_STATES = ("failed", "timeout", "crashed")
 
 # History column holding the residual named by CONV_FIELD.
@@ -49,12 +49,19 @@ class Case:
     alpha_step: float
     n_points: int = 200
     y_plus: float = 1.0
+    mesh: str = "structured"  # SU2 only: "structured" (Scripts/Meshing/meshing.py) or "hybrid" (hybrid.py)
+    repanel: bool = True      # False: the airfoil file's own coordinates, no fit or re-paneling
 
     @property
     def case_id(self):
         stem = os.path.splitext(os.path.basename(self.airfoil))[0]
         name = (f"{self.solver}_{stem}_Re{self.reynolds:g}_M{self.mach:g}"
                 f"_a{self.alpha_min:g}_{self.alpha_max:g}_{self.alpha_step:g}")
+        # Non-default choices extend the name, so earlier batch folders keep resolving to the same cases.
+        if self.solver == "su2" and self.mesh != "structured":
+            name += f"_{self.mesh}"
+        if not self.repanel:
+            name += "_raw"
         return regex.sub(r"[^A-Za-z0-9_.+-]", "_", name)
 
     def alphas(self):
@@ -70,7 +77,8 @@ class Case:
 
 def load_cases(path):
     """Read a case list: one row per case, columns airfoil, solver, re, mach, alpha_min, alpha_max, alpha_step,
-    and optionally n_points (re-paneled coordinates per surface, default 200) and y_plus (target, default 1)."""
+    and optionally n_points (re-paneled coordinates per surface, default 200), y_plus (target, default 1), mesh
+    (structured or hybrid, default structured) and repanel (yes/no, default yes)."""
     cases = []
     with open(path, newline="") as f:
         reader = csv.DictReader(f)
@@ -91,7 +99,9 @@ def load_cases(path):
                     alpha_min=float(row["alpha_min"]), alpha_max=float(row["alpha_max"]),
                     alpha_step=float(row["alpha_step"]),
                     n_points=int(float(row.get("n_points") or 200)),
-                    y_plus=float(row.get("y_plus") or 1.0)))
+                    y_plus=float(row.get("y_plus") or 1.0),
+                    mesh=_mesh_type(row.get("mesh")),
+                    repanel=_yes_no(row.get("repanel"), default=True)))
             except (TypeError, ValueError) as e:
                 raise ValueError(f"{path}, line {reader.line_num}: {e}") from None
     ids = [c.case_id for c in cases]
@@ -99,6 +109,27 @@ def load_cases(path):
     if duplicates:
         raise ValueError(f"{path}: duplicate case(s) {', '.join(duplicates)}")
     return cases
+
+
+MESH_TYPES = ("structured", "hybrid")
+
+
+def _mesh_type(value):
+    mesh = (value or "structured").strip().lower()
+    if mesh not in MESH_TYPES:
+        raise ValueError(f"mesh must be one of {', '.join(MESH_TYPES)}, got {value!r}")
+    return mesh
+
+
+def _yes_no(value, default):
+    if value is None or str(value).strip() == "":
+        return default
+    v = str(value).strip().lower()
+    if v in ("1", "true", "yes", "y"):
+        return True
+    if v in ("0", "false", "no", "n"):
+        return False
+    raise ValueError(f"expected yes or no, got {value!r}")
 
 
 def _read_template(name):
@@ -226,31 +257,55 @@ def gui_recommended_settings(mach, reynolds):
     return regime, template, merged
 
 
+def split_surfaces(x, y):
+    """Upper (trailing edge -> leading edge) and lower (leading edge -> trailing edge) surfaces of a Selig-ordered
+    coordinate loop, sharing the leading-edge point, as lists of [x, y] like Interpolate.get_surface."""
+    le = int(np.argmin(x))
+    upper = [[float(a), float(b)] for a, b in zip(x[:le + 1], y[:le + 1])]
+    lower = [[float(a), float(b)] for a, b in zip(x[le:], y[le:])]
+    return upper, lower
+
+
 def prepare_geometry(case, airfoil_dir, case_dir):
-    """CST and PARSEC fits, the lower-RMSE choice and the spline re-paneling, as the GUI's Analyze button does.
-    Writes output.dat into case_dir and returns its coordinates with a record of the fit."""
-    from main import error  # the CST/PARSEC selection rule lives in the GUI module
+    """
+    With case.repanel: CST and PARSEC fits, the lower-RMSE choice and the spline re-paneling to case.n_points per
+    surface, as the GUI's Analyze button does. Without it: the airfoil file's own coordinates. Writes output.dat into
+    case_dir and returns its coordinates, the upper and lower surfaces (for the hybrid mesher) and a record.
+    """
     from Scripts.Geometry import read_airfoil
+
+    name = case.airfoil
+    if not case.repanel:
+        x, y = read_airfoil.read_airfoil_coordinates(airfoil_dir, name)
+        with open(os.path.join(case_dir, "output.dat"), "w") as f:
+            f.write(f"{os.path.splitext(name)[0]} (file coordinates, not re-paneled)\n")
+            for a, b in zip(x, y):
+                f.write(f"{a:.8f} {b:.8f}\n")
+        upper, lower = split_surfaces(x, y)
+        return x, y, upper, lower, {"method": "none (file coordinates)", "n_coordinates": int(len(x))}
+
+    from main import error  # the CST/PARSEC selection rule lives in the GUI module
     from Scripts.Geometry.cst import CST
     from Scripts.Geometry.interpolate import Interpolate
     from Scripts.Geometry.parsec import Parsec
 
-    name = case.airfoil
     _, y_input = read_airfoil.read_airfoil_coordinates(airfoil_dir, name)
     foil_parsec = Parsec(airfoil_dir, name).foil()
     foil_cst = CST(airfoil_dir, name).foil()
     method, rmse_parsec, rmse_cst = error(foil_parsec, foil_cst, y_input)
-    Interpolate(airfoil_dir, name).airfoil_interpolate(
+    interp = Interpolate(airfoil_dir, name)
+    interp.airfoil_interpolate(
         case.n_points, method, foil_parsec if method == "PARSEC" else foil_cst, airfoil_dir, name, case_dir)
+    upper, lower = interp.get_surface()
     x, y = read_airfoil.read_airfoil_coordinates(case_dir, "output.dat")
-    return x, y, {"method": method, "rmse_parsec": float(rmse_parsec), "rmse_cst": float(rmse_cst),
-                  "n_coordinates": int(len(x))}
+    return x, y, upper, lower, {"method": method, "rmse_parsec": float(rmse_parsec), "rmse_cst": float(rmse_cst),
+                                "n_coordinates": int(len(x))}
 
 
 def run_xfoil_case(case, case_dir, airfoil_dir, xfoil_path, timeout):
     from Scripts.Solver_and_Results import xfoil1
 
-    _, _, geometry = prepare_geometry(case, airfoil_dir, case_dir)
+    _, _, _, _, geometry = prepare_geometry(case, airfoil_dir, case_dir)
 
     fired = threading.Event()
 
@@ -271,9 +326,11 @@ def run_xfoil_case(case, case_dir, airfoil_dir, xfoil_path, timeout):
     points = []
     for alpha in case.alphas():
         row = next((r for r in polar if len(r) >= 5 and abs(r[0] - alpha) < 1e-3), None)
+        # XFOIL 6.99 polar columns: alpha, CL, CD, CDp, CM, Top_Xtr, Bot_Xtr
         points.append({
             "alpha": alpha, "converged": row is not None, "state": "converged" if row else "not_converged",
-            "cl": row[1] if row else None, "cd": row[2] if row else None, "cm": row[4] if row else None,
+            "cl": row[1] if row else None, "cd": row[2] if row else None, "cdp": row[3] if row else None,
+            "cm": row[4] if row else None,
             "xtr_top": row[5] if row and len(row) > 5 else None,
             "xtr_bottom": row[6] if row and len(row) > 6 else None,
         })
@@ -328,26 +385,36 @@ def read_history(history_path, settings):
     return out
 
 
-def run_su2_case(case, case_dir, airfoil_dir, cores, timeout, dry_run=False, su2_config=None, max_iter=None):
+def run_su2_case(case, case_dir, airfoil_dir, cores, timeout, dry_run=False, su2_config=None, max_iter=None,
+                 su2_settings=None):
     """
-    Mesh the case and run SU2 for each angle. With su2_config, every angle uses that configuration's numerical
-    settings verbatim (write_config_from_file); otherwise the settings are the ones the GUI selects automatically.
+    Mesh the case (case.mesh) and run SU2 for each angle. The SU2 settings are, in order of precedence: the
+    configuration file su2_config (numerical settings verbatim, write_config_from_file); su2_settings, a
+    {"regime", "settings"} pair as the GUI's Solver Setup tab hands to prepare_su2_config; otherwise the settings the
+    GUI selects automatically for the case's Mach and Reynolds numbers.
     """
     from Scripts.Meshing.meshing import generate_mesh
     from Scripts.Meshing.wall_spacing import design_yplus, measure_wall_spacing
     from Scripts.Solver_and_Results.su2_analyzer import SU2Runner, extract_surface_yplus, prepare_su2_config
 
-    x, y, geometry = prepare_geometry(case, airfoil_dir, case_dir)
+    x, y, upper, lower, geometry = prepare_geometry(case, airfoil_dir, case_dir)
     if su2_config:
         regime, template, settings = "from file", os.path.abspath(su2_config), _read_cfg(su2_config)
+    elif su2_settings:
+        regime, template, settings = su2_settings["regime"], "GUI Solver Setup tab", dict(su2_settings["settings"])
     else:
         regime, template, settings = gui_recommended_settings(case.mach, case.reynolds)
 
     # The mesher writes airfoil.su2 into the working directory, as it does from the GUI.
     os.chdir(case_dir)
-    generate_mesh(x, y, case.reynolds, case.mach, y_plus=case.y_plus, show_graphics=False, hide_output=True)
+    if case.mesh == "hybrid":
+        from Scripts.Meshing.hybrid import generate_hybrid
+        generate_hybrid(upper, lower, case.reynolds, case.mach, y_plus=case.y_plus, show_graphics=False,
+                        hide_output=True)
+    else:
+        generate_mesh(x, y, case.reynolds, case.mach, y_plus=case.y_plus, show_graphics=False, hide_output=True)
     mesh_path = os.path.join(case_dir, "airfoil.su2")
-    mesh = {"cells": _count_cells(mesh_path)}
+    mesh = {"type": case.mesh, "cells": _count_cells(mesh_path)}
     _, spacing = measure_wall_spacing(mesh_path)
     if spacing is not None and np.any(np.isfinite(spacing)):
         yp = design_yplus(spacing[np.isfinite(spacing)], case.reynolds)
@@ -443,7 +510,7 @@ def _mark(out_dir, case, state, message):
 
 
 def _case_process(case_fields, out_dir, airfoil_dir, xfoil_path, cores, timeout, dry_run=False, su2_config=None,
-                  max_iter=None):
+                  max_iter=None, su2_settings=None):
     """Entry point of the child process that runs one case."""
     case = Case(**case_fields)
     case_dir = os.path.join(out_dir, case.case_id)
@@ -460,7 +527,8 @@ def _case_process(case_fields, out_dir, airfoil_dir, xfoil_path, cores, timeout,
         if case.solver == "xfoil":
             result = run_xfoil_case(case, case_dir, airfoil_dir, xfoil_path, timeout)
         else:
-            result = run_su2_case(case, case_dir, airfoil_dir, cores, timeout, dry_run, su2_config, max_iter)
+            result = run_su2_case(case, case_dir, airfoil_dir, cores, timeout, dry_run, su2_config, max_iter,
+                                  su2_settings)
         record.update(result)
         n_ok = sum(1 for p in result["points"] if p["converged"])
         if result.get("dry_run"):
@@ -492,13 +560,23 @@ def kill_process_tree(pid):
             pass
 
 
-def _run_pool(cases, workers, child_args, time_limit, out_dir, log):
-    """Run cases in child processes, at most `workers` at a time, killing any that outlive `time_limit(case)`."""
+def _run_pool(cases, workers, child_args, time_limit, out_dir, log, should_stop=None):
+    """Run cases in child processes, at most `workers` at a time, killing any that outlive `time_limit(case)`.
+    When should_stop() turns true, the running cases are killed and marked 'stopped' and the rest are not started."""
     ctx = multiprocessing.get_context("spawn")
     queue = list(cases)
     running = {}
     try:
         while queue or running:
+            if should_stop is not None and should_stop():
+                for case_id, (case, proc, _) in list(running.items()):
+                    kill_process_tree(proc.pid)
+                    proc.join(10)
+                    del running[case_id]
+                    _mark(out_dir, case, "stopped", "stopped by user")
+                    log(f"[stopped] {case_id}")
+                queue.clear()
+                break
             while queue and len(running) < workers:
                 case = queue.pop(0)
                 proc = ctx.Process(target=_case_process, args=child_args(case))
@@ -528,7 +606,8 @@ def _run_pool(cases, workers, child_args, time_limit, out_dir, log):
 
 
 def run_batch(cases, out_dir, airfoil_dir, xfoil_path=None, cores=8, workers=4, xfoil_timeout=180.0,
-              su2_timeout=4 * 3600.0, rerun_failed=False, dry_run=False, su2_config=None, max_iter=None, log=print):
+              su2_timeout=4 * 3600.0, rerun_failed=False, dry_run=False, su2_config=None, max_iter=None, log=print,
+              should_stop=None, su2_settings=None):
     """
     Run every case that has not finished yet and write the summaries.
 
@@ -536,7 +615,10 @@ def run_batch(cases, out_dir, airfoil_dir, xfoil_path=None, cores=8, workers=4, 
     xfoil_timeout limits one XFOIL sweep, su2_timeout one SU2 angle; the parent kills any case that outlives its
     limit plus a margin for the geometry fit and meshing. dry_run stops SU2 cases after writing the mesh and
     configuration files. su2_config replaces the automatically selected SU2 settings with those of a given
-    configuration file (max_iter caps its ITER). Returns the statistics written to batch_summary.json.
+    configuration file (max_iter caps its ITER); otherwise su2_settings ({"regime", "settings"}, as the GUI's Solver
+    Setup tab gives them) replace them when given. should_stop, if given, is polled while cases run (the GUI's Stop
+    button); cases it interrupts are marked 'stopped' and run again on the next call. Returns the statistics
+    written to batch_summary.json.
     """
     out_dir = os.path.abspath(out_dir)
     airfoil_dir = os.path.abspath(airfoil_dir)
@@ -561,12 +643,12 @@ def run_batch(cases, out_dir, airfoil_dir, xfoil_path=None, cores=8, workers=4, 
         xfoil_path = os.path.abspath(resolved)
         _run_pool(xfoil_cases, workers,
                   lambda c: (asdict(c), out_dir, airfoil_dir, xfoil_path, 1, xfoil_timeout),
-                  lambda c: xfoil_timeout + 300.0, out_dir, log)
-    if su2_cases:
+                  lambda c: xfoil_timeout + 300.0, out_dir, log, should_stop)
+    if su2_cases and not (should_stop is not None and should_stop()):
         _run_pool(su2_cases, 1,
                   lambda c: (asdict(c), out_dir, airfoil_dir, xfoil_path, cores, su2_timeout, dry_run,
-                             os.path.abspath(su2_config) if su2_config else None, max_iter),
-                  lambda c: su2_timeout * len(c.alphas()) + 1800.0, out_dir, log)
+                             os.path.abspath(su2_config) if su2_config else None, max_iter, su2_settings),
+                  lambda c: su2_timeout * len(c.alphas()) + 1800.0, out_dir, log, should_stop)
 
     return write_summary(cases, out_dir)
 
@@ -581,6 +663,9 @@ def write_summary(cases, out_dir):
         case_rows.append({
             "case_id": case.case_id, "solver": case.solver, "airfoil": case.airfoil, "re": case.reynolds,
             "mach": case.mach, "n_alpha": len(case.alphas()),
+            "repanel": case.repanel, "n_points": case.n_points if case.repanel else None,
+            "mesh": case.mesh if case.solver == "su2" else None,
+            "y_plus": case.y_plus if case.solver == "su2" else None,
             "n_converged": sum(1 for p in points if p.get("converged")), "state": status["state"],
             "wall_s": status.get("wall_s"), "cores": status.get("cores"),
             "fit_method": (status.get("geometry") or {}).get("method"),
@@ -593,7 +678,7 @@ def write_summary(cases, out_dir):
             point_rows.append({
                 "case_id": case.case_id, "solver": case.solver, "airfoil": case.airfoil, "re": case.reynolds,
                 "mach": case.mach, "alpha": p.get("alpha"), "converged": p.get("converged"),
-                "state": p.get("state"), "cl": p.get("cl"), "cd": p.get("cd"), "cm": p.get("cm"),
+                "state": p.get("state"), "cl": p.get("cl"), "cd": p.get("cd"), "cdp": p.get("cdp"), "cm": p.get("cm"),
                 "iterations": p.get("iterations"), "final_residual": p.get("final_residual"),
                 "yplus_max": p.get("yplus_max"), "yplus_median": p.get("yplus_median"),
                 "xtr_top": p.get("xtr_top"), "xtr_bottom": p.get("xtr_bottom"), "wall_s": p.get("wall_s"),
@@ -625,6 +710,76 @@ def write_summary(cases, out_dir):
             "converged_angles_per_core_hour": converged / core_hours if core_hours else None,
             "points_recorded": int(len(pts)),
         }
+    stats["excel"] = write_excel(cases_df, points_df, out_dir)
     with open(os.path.join(out_dir, "batch_summary.json"), "w") as f:
         json.dump(stats, f, indent=1)
     return stats
+
+
+# Spreadsheet columns per solver: (results.csv column, heading). XFOIL writes only converged angles to its polar.
+EXCEL_COLUMNS = {
+    "xfoil": [("airfoil", "Airfoil"), ("alpha", "alpha"), ("cl", "CL"), ("cd", "CD"), ("cdp", "CDp"), ("cm", "CM"),
+              ("xtr_top", "Top_Xtr"), ("xtr_bottom", "Bot_Xtr")],
+    "su2": [("airfoil", "Airfoil"), ("alpha", "alpha"), ("cl", "CL"), ("cd", "CD"), ("cm", "CM"),
+            ("converged", "converged"), ("state", "state"), ("iterations", "iterations"),
+            ("final_residual", "final_residual"), ("yplus_max", "yplus_max")],
+}
+
+
+def _sheet_names(groups):
+    """'Re 50000' per Reynolds number; solver and Mach are added only when the batch mixes them."""
+    solvers = {g[0] for g in groups}
+    machs = {g[2] for g in groups}
+    names = {}
+    for solver, reynolds, mach in groups:
+        re_txt = f"{int(reynolds)}" if float(reynolds).is_integer() else f"{reynolds:g}"
+        name = f"Re {re_txt}"
+        if len(machs) > 1:
+            name += f" M {mach:g}"
+        if len(solvers) > 1:
+            name = f"{solver.upper()} {name}"
+        names[(solver, reynolds, mach)] = regex.sub(r"[\[\]:*?/\\]", "_", name)[:31]
+    return names
+
+
+def write_excel(cases_df, points_df, out_dir):
+    """dataset.xlsx: one sheet per Reynolds number (rows sorted by airfoil, then angle), an Info sheet and a
+    "Failed or not run" sheet. Needs openpyxl; returns the path, or a note when it could not be written."""
+    if cases_df.empty:
+        return None
+    try:
+        import openpyxl  # noqa: F401
+    except ImportError:
+        return "not written: install openpyxl (pip install openpyxl) for dataset.xlsx"
+    path = os.path.join(out_dir, "dataset.xlsx")
+    groups = sorted({(r.solver, float(r.re), float(r.mach)) for r in cases_df.itertuples()})
+    names = _sheet_names(groups)
+    info = []
+    with pd.ExcelWriter(path, engine="openpyxl") as xl:
+        for solver, reynolds, mach in groups:
+            cols = EXCEL_COLUMNS[solver]
+            sub = points_df[(points_df["solver"] == solver) & (points_df["re"].astype(float) == reynolds)
+                            & (points_df["mach"].astype(float) == mach)] if not points_df.empty else points_df
+            if solver == "xfoil" and not sub.empty:
+                sub = sub[sub["converged"] == True]  # noqa: E712 - pandas element-wise
+            sheet = (sub.sort_values(["airfoil", "alpha"])[[c for c, _ in cols]].rename(columns=dict(cols))
+                     if not sub.empty else pd.DataFrame(columns=[h for _, h in cols]))
+            sheet.to_excel(xl, sheet_name=names[(solver, reynolds, mach)], index=False)
+            xl.sheets[names[(solver, reynolds, mach)]].freeze_panes = "B2"
+            cases = cases_df[(cases_df["solver"] == solver) & (cases_df["re"].astype(float) == reynolds)
+                             & (cases_df["mach"].astype(float) == mach)]
+            info.append({"sheet": names[(solver, reynolds, mach)], "solver": solver, "Re": reynolds, "Mach": mach,
+                         "airfoils": len(cases), "airfoils with data": int((cases["n_converged"] > 0).sum()),
+                         "angles converged": int(cases["n_converged"].sum()),
+                         "angles requested": int(cases["n_alpha"].sum())})
+        pd.DataFrame(info).to_excel(xl, sheet_name="Info", index=False)
+        notes = pd.DataFrame({"note": [
+            f"Generated {datetime.now().isoformat(timespec='seconds')} by FALCON (commit {_git_commit()}).",
+            "XFOIL: free transition, Ncrit 9 (XFOIL defaults), PANE re-paneling; only converged angles appear.",
+            "One row per airfoil and angle; CDp is the pressure drag, Top_Xtr/Bot_Xtr the transition locations.",
+            "Per-case logs and status.json are in the case folders; results.csv holds every requested angle."]})
+        notes.to_excel(xl, sheet_name="Info", index=False, startrow=len(info) + 2)
+        failed = cases_df[~cases_df["state"].isin(["converged", "partial"])][
+            ["airfoil", "solver", "re", "mach", "state", "error"]].sort_values(["re", "airfoil"])
+        failed.to_excel(xl, sheet_name="Failed or not run", index=False)
+    return path
