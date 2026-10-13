@@ -597,6 +597,9 @@ class FalconApp(QMainWindow):
         cfg_layout.addWidget(self.settings_scroll)
 
         setup_layout.addWidget(g_cfg, stretch=2)
+        # The Batch tab shows this same panel (it is moved there while the Batch solver-setup tab is open).
+        self.su2_cfg_group = g_cfg
+        self.su2_setup_layout = setup_layout
 
         g_run = QGroupBox("4. Run Analysis")
         run_layout = QVBoxLayout(g_run)
@@ -746,10 +749,12 @@ class FalconApp(QMainWindow):
     def check_turbulence_status(self):
         pass
 
-    def load_recommended_settings(self):
+    def load_recommended_settings(self, *, mach=None, reynolds=None):  # keyword-only: clicked passes `checked`
+        """Load the template for a Mach and Reynolds number into Solver Setup & Run; by default those of the
+        Conditions tab (the Batch tab passes its own)."""
         try:
-            mach = float(self.su2_mach_entry.text())
-            reynolds = float(self.su2_re_entry.text())
+            mach = float(self.su2_mach_entry.text()) if mach is None else float(mach)
+            reynolds = float(self.su2_re_entry.text()) if reynolds is None else float(reynolds)
         except ValueError:
             QMessageBox.warning(
                 self,
@@ -1111,134 +1116,183 @@ class FalconApp(QMainWindow):
 
     # ------------------------------------------------------------------ Dataset generation (batch runner)
     def init_tab4(self):
+        """Batch tab: the same steps and settings as the other tabs, for many airfoils at once, with no
+        plots or results views; one solver per batch; the SU2 solver settings are those of Solver Setup & Run."""
         self.tab4 = QWidget()
-        self.tabs.addTab(self.tab4, "Dataset Generation")
-        layout = QGridLayout(self.tab4)
+        self.tabs.addTab(self.tab4, "Batch")
+        outer = QVBoxLayout(self.tab4)
 
-        # 1. Airfoils: every airfoil file in one folder.
-        g_foils = QGroupBox("1. Airfoils")
-        gf = QVBoxLayout(g_foils)
-        h_dir = QHBoxLayout()
-        h_dir.addWidget(QLabel("Airfoil folder:"))
-        self.batch_folder_entry = QLineEdit(self.directory)
-        self.batch_folder_entry.setToolTip("Every .dat file in this folder is run")
-        self.batch_folder_entry.editingFinished.connect(self._batch_scan_folder)
-        b_dir = QPushButton("...")
-        b_dir.clicked.connect(self._batch_browse_folder)
-        h_dir.addWidget(self.batch_folder_entry)
-        h_dir.addWidget(b_dir)
-        gf.addLayout(h_dir)
-        self.batch_folder_label = QLabel()
-        gf.addWidget(self.batch_folder_label)
-        self.batch_file_list = QListWidget()
-        self.batch_file_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        gf.addWidget(self.batch_file_list, stretch=1)
-        h_rp = QHBoxLayout()
-        self.batch_repanel_check = QCheckBox("Re-panel the airfoils")
-        self.batch_repanel_check.setChecked(True)
-        self.batch_repanel_check.setToolTip("Spline re-paneling as in the Analyze button; unchecked = the files' "
-                                            "own coordinates")
-        self.batch_repanel_check.toggled.connect(self._batch_update_enabled)
-        self.batch_npoints_entry = QLineEdit("200")
-        self.batch_npoints_entry.setToolTip(f"Coordinates per surface. XFOIL loads at most 1000 points, so at most "
-                                            f"{XFOIL_MAX_POINTS_PER_SURFACE} for XFOIL.")
-        h_rp.addWidget(self.batch_repanel_check)
-        h_rp.addWidget(QLabel("Coordinates per surface:"))
-        h_rp.addWidget(self.batch_npoints_entry)
-        h_rp.addStretch()
-        gf.addLayout(h_rp)
-        layout.addWidget(g_foils, 0, 0, 3, 1)
-
-        # 2. Conditions
-        g_cond = QGroupBox("2. Conditions")
-        cf = QFormLayout(g_cond)
+        h_solver = QHBoxLayout()
+        h_solver.addWidget(QLabel("Solver for this batch:"))
         self.batch_solver_combo = QComboBox()
         self.batch_solver_combo.addItems(["XFOIL", "SU2"])
         self.batch_solver_combo.currentIndexChanged.connect(self._batch_update_enabled)
-        self.batch_re_entry = QLineEdit("1e5, 1e6")
-        self.batch_re_entry.setToolTip("One or more Reynolds numbers, separated by commas")
-        self.batch_mach_entry = QLineEdit("0.0")
-        self.batch_mach_entry.setToolTip("One or more Mach numbers, separated by commas (XFOIL: below 1)")
-        self.batch_alpha_min_entry = QLineEdit("-4")
-        self.batch_alpha_max_entry = QLineEdit("12")
-        self.batch_alpha_step_entry = QLineEdit("1")
-        cf.addRow("Solver:", self.batch_solver_combo)
-        cf.addRow("Reynolds numbers:", self.batch_re_entry)
-        cf.addRow("Mach numbers:", self.batch_mach_entry)
-        cf.addRow("Min AoA:", self.batch_alpha_min_entry)
-        cf.addRow("Max AoA:", self.batch_alpha_max_entry)
-        cf.addRow("AoA step:", self.batch_alpha_step_entry)
+        h_solver.addWidget(self.batch_solver_combo)
+        h_solver.addStretch()
+        outer.addLayout(h_solver)
+
+        self.batch_tabs = QTabWidget()
+        outer.addWidget(self.batch_tabs)
+
+        # 1. Parameterization: any folder, several airfoils at once.
+        t_par = QWidget()
+        self.batch_tabs.addTab(t_par, "1. Parameterization")
+        lp = QGridLayout(t_par)
+        g_sel = QGroupBox("Select Airfoils")
+        gs = QVBoxLayout(g_sel)
+        h_dir = QHBoxLayout()
+        h_dir.addWidget(QLabel("Airfoil folder:"))
+        self.batch_folder_entry = QLineEdit(self.directory)
+        self.batch_folder_entry.editingFinished.connect(self._batch_scan_folder)
+        b_dir = QPushButton("Browse...")
+        b_dir.clicked.connect(self._batch_browse_folder)
+        h_dir.addWidget(self.batch_folder_entry)
+        h_dir.addWidget(b_dir)
+        gs.addLayout(h_dir)
+        h_search = QHBoxLayout()
+        h_search.addWidget(QLabel("Search:"))
+        self.batch_search = QLineEdit()
+        self.batch_search.textChanged.connect(self._batch_filter)
+        h_search.addWidget(self.batch_search)
+        gs.addLayout(h_search)
+        self.batch_airfoil_list = QListWidget()
+        # Ctrl+click, Shift+click and Ctrl+A work natively in extended selection.
+        self.batch_airfoil_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.batch_airfoil_list.itemSelectionChanged.connect(self._batch_update_count)
+        gs.addWidget(self.batch_airfoil_list, stretch=1)
+        h_sel = QHBoxLayout()
+        b_all = QPushButton("Select All (Ctrl+A)")
+        b_all.clicked.connect(self._batch_select_shown)
+        b_none = QPushButton("Clear")
+        b_none.clicked.connect(self.batch_airfoil_list.clearSelection)
+        self.batch_selected_label = QLabel()
+        for wdg in (b_all, b_none, self.batch_selected_label):
+            h_sel.addWidget(wdg)
+        h_sel.addStretch()
+        gs.addLayout(h_sel)
+        lp.addWidget(g_sel, 0, 0)
+        g_ctrl = QGroupBox("Controls")
+        gc = QFormLayout(g_ctrl)
+        self.batch_repanel_check = QCheckBox("Fit CST/PARSEC and re-panel (as Analyze does)")
+        self.batch_repanel_check.setChecked(True)
+        self.batch_repanel_check.setToolTip("Unchecked: each file's own coordinates are used as they are")
+        self.batch_repanel_check.toggled.connect(self._batch_update_enabled)
+        self.batch_npoints_entry = QLineEdit(self.n_points_entry.text())
+        self.batch_npoints_entry.setToolTip(f"Points per surface. XFOIL loads at most 1000 points, so at most "
+                                            f"{XFOIL_MAX_POINTS_PER_SURFACE} for XFOIL.")
+        gc.addRow(self.batch_repanel_check)
+        gc.addRow("Desired points:", self.batch_npoints_entry)
+        lp.addWidget(g_ctrl, 0, 1, Qt.AlignmentFlag.AlignTop)
+        lp.setColumnStretch(0, 2)
+        lp.setColumnStretch(1, 1)
+
+        # 2. XFOIL
+        t_xf = QWidget()
+        self.batch_tabs.addTab(t_xf, "2. XFOIL")
+        lx = QGridLayout(t_xf)
+        g_xf = QGroupBox("Input Parameters")
+        fx = QFormLayout(g_xf)
         self.batch_xfoil_entry = QLineEdit(self.xfoil_path_entry.text())
         b_xf = QPushButton("...")
         b_xf.clicked.connect(lambda: self.open_file(self.batch_xfoil_entry))
         h_xf = QHBoxLayout()
         h_xf.addWidget(self.batch_xfoil_entry)
         h_xf.addWidget(b_xf)
-        cf.addRow("XFOIL executable:", h_xf)
+        fx.addRow("XFOIL Executable:", h_xf)
+        self.batch_xf_re_entry = QLineEdit("50000, 100000")
+        self.batch_xf_mach_entry = QLineEdit("0.0")
+        self.batch_xf_amin_entry = QLineEdit("-10")
+        self.batch_xf_amax_entry = QLineEdit("15")
+        self.batch_xf_astep_entry = QLineEdit("1")
+        fx.addRow("Reynolds Numbers:", self.batch_xf_re_entry)
+        fx.addRow("Mach Numbers:", self.batch_xf_mach_entry)
+        fx.addRow("Min Alpha:", self.batch_xf_amin_entry)
+        fx.addRow("Max Alpha:", self.batch_xf_amax_entry)
+        fx.addRow("Step:", self.batch_xf_astep_entry)
         self.batch_workers_entry = QLineEdit(str(max(1, (os.cpu_count() or 2) // 2)))
         self.batch_xfoil_timeout_entry = QLineEdit("60")
-        self.batch_xfoil_timeout_entry.setToolTip("Some airfoils hang XFOIL; the case is stopped after this long")
-        cf.addRow("Parallel XFOIL cases:", self.batch_workers_entry)
-        cf.addRow("XFOIL time limit per case (s):", self.batch_xfoil_timeout_entry)
-        layout.addWidget(g_cond, 0, 1)
+        self.batch_xfoil_timeout_entry.setToolTip("Some airfoils hang XFOIL; such a case is stopped after this long")
+        fx.addRow("Parallel Cases:", self.batch_workers_entry)
+        fx.addRow("Time Limit per Case (s):", self.batch_xfoil_timeout_entry)
+        fx.addRow(QLabel("Re and Mach take several values, separated by commas."))
+        lx.addWidget(g_xf, 0, 0, Qt.AlignmentFlag.AlignTop)
+        lx.setColumnStretch(1, 1)
 
-        # 3. Mesh and SU2 solver setup (SU2 only)
-        self.batch_su2_group = QGroupBox("3. Mesh and SU2 Solver Setup")
-        sf = QFormLayout(self.batch_su2_group)
+        # 3. SU2 conditions and meshing
+        t_cm = QWidget()
+        self.batch_tabs.addTab(t_cm, "3. SU2 Conditions && Meshing")
+        lc = QGridLayout(t_cm)
+        g_flow = QGroupBox("1. Flow Conditions")
+        ff = QFormLayout(g_flow)
+        self.batch_su2_re_entry = QLineEdit(self.su2_re_entry.text())
+        self.batch_su2_mach_entry = QLineEdit(self.su2_mach_entry.text())
+        self.batch_su2_amin_entry = QLineEdit(self.su2_alpha_min_entry.text())
+        self.batch_su2_amax_entry = QLineEdit(self.su2_alpha_max_entry.text())
+        self.batch_su2_astep_entry = QLineEdit(self.su2_alpha_step_entry.text())
+        ff.addRow("Reynolds:", self.batch_su2_re_entry)
+        ff.addRow("Mach:", self.batch_su2_mach_entry)
+        ff.addRow("Min AoA:", self.batch_su2_amin_entry)
+        ff.addRow("Max AoA:", self.batch_su2_amax_entry)
+        ff.addRow("Step:", self.batch_su2_astep_entry)
+        b_rec = QPushButton("Load Recommended Settings")
+        b_rec.setToolTip("Loads the template for the first Mach and Reynolds number into Solver Setup & Run")
+        b_rec.clicked.connect(self._batch_load_recommended)
+        ff.addRow(b_rec)
+        ff.addRow(QLabel("Re and Mach take several values, separated by commas."))
+        lc.addWidget(g_flow, 0, 0, Qt.AlignmentFlag.AlignTop)
+        g_mesh = QGroupBox("2. Mesh Generation")
+        fm = QFormLayout(g_mesh)
         self.batch_mesh_combo = QComboBox()
-        self.batch_mesh_combo.addItems(["Structured (C-grid)", "Hybrid"])
-        self.batch_yplus_entry = QLineEdit("1.0")
-        self.batch_yplus_entry.setToolTip("The same Target y+ input as the mesh buttons in Conditions & Meshing")
-        sf.addRow("Mesh:", self.batch_mesh_combo)
-        sf.addRow("Target y+:", self.batch_yplus_entry)
-        self.batch_settings_combo = QComboBox()
-        self.batch_settings_combo.addItems(["As set in 'Solver Setup & Run'", "Recommended for each case",
-                                            "From an SU2 .cfg file"])
-        self.batch_settings_combo.setToolTip(
-            "As set: the regime and every setting currently in SU2 Analysis > Solver Setup & Run, for all cases.\n"
-            "Recommended: the template 'Load Recommended Settings' picks for each case's Mach and Reynolds numbers.\n"
-            "File: the numerical settings of an SU2 configuration file, copied verbatim.")
-        self.batch_settings_combo.currentIndexChanged.connect(self._batch_update_enabled)
-        sf.addRow("Solver settings:", self.batch_settings_combo)
-        self.batch_settings_label = QLabel()
-        self.batch_settings_label.setWordWrap(True)
-        sf.addRow(self.batch_settings_label)
-        self.batch_su2_cfg_entry = QLineEdit()
-        b_cfg = QPushButton("...")
-        b_cfg.clicked.connect(lambda: self.open_file(self.batch_su2_cfg_entry))
-        h_cfg = QHBoxLayout()
-        h_cfg.addWidget(self.batch_su2_cfg_entry)
-        h_cfg.addWidget(b_cfg)
-        sf.addRow("SU2 .cfg file:", h_cfg)
-        self.batch_max_iter_entry = QLineEdit()
-        self.batch_max_iter_entry.setPlaceholderText("Optional cap on ITER")
-        sf.addRow("Max iterations (file):", self.batch_max_iter_entry)
-        self.batch_cores_entry = QLineEdit(self.num_cores_entry.text())
-        self.batch_su2_timeout_entry = QLineEdit("4")
-        sf.addRow("SU2 cores (MPI):", self.batch_cores_entry)
-        sf.addRow("SU2 time limit per angle (h):", self.batch_su2_timeout_entry)
-        self.batch_dry_check = QCheckBox("Dry run (write meshes and configs only)")
-        sf.addRow(self.batch_dry_check)
-        layout.addWidget(self.batch_su2_group, 1, 1)
+        self.batch_mesh_combo.addItems(["Structured Mesh", "Hybrid Mesh"])
+        self.batch_yplus_entry = QLineEdit(self.yplus_entry.text())
+        fm.addRow("Mesh:", self.batch_mesh_combo)
+        fm.addRow("Target y+:", self.batch_yplus_entry)
+        lc.addWidget(g_mesh, 0, 1, Qt.AlignmentFlag.AlignTop)
 
-        # 4. Run
-        g_go = QGroupBox("4. Run")
-        gg = QVBoxLayout(g_go)
-        h_out = QHBoxLayout()
-        h_out.addWidget(QLabel("Output folder:"))
+        # 4. SU2 solver setup: the SU2 Configuration panel of SU2 Analysis > Solver Setup & Run itself, moved here
+        # while this tab is open, so both tabs always edit the same settings.
+        t_ss = QWidget()
+        self.batch_tabs.addTab(t_ss, "4. SU2 Solver Setup")
+        self.batch_ss_layout = QVBoxLayout(t_ss)
+        g_par = QGroupBox("Parallel Run")
+        h_par = QHBoxLayout(g_par)
+        self.batch_mpi_check = QCheckBox("Use MPI")
+        self.batch_mpi_check.setChecked(self.use_mpi_check.isChecked())
+        self.batch_cores_entry = QLineEdit(self.num_cores_entry.text())
+        self.batch_cores_entry.setFixedWidth(50)
+        self.batch_mpi_check.toggled.connect(self.batch_cores_entry.setEnabled)
+        self.batch_su2_timeout_entry = QLineEdit("4")
+        self.batch_su2_timeout_entry.setFixedWidth(50)
+        h_par.addWidget(self.batch_mpi_check)
+        h_par.addWidget(QLabel("Cores:"))
+        h_par.addWidget(self.batch_cores_entry)
+        h_par.addWidget(QLabel("Time Limit per Angle (h):"))
+        h_par.addWidget(self.batch_su2_timeout_entry)
+        h_par.addStretch()
+        self.batch_ss_layout.addWidget(g_par)
+
+        # 5. Run
+        t_run = QWidget()
+        self.batch_tabs.addTab(t_run, "5. Run")
+        lr = QVBoxLayout(t_run)
+        g_run = QGroupBox("4. Run Batch")
+        fr = QFormLayout(g_run)
         self.batch_out_entry = QLineEdit(os.path.join(self.script_dir, "output", "dataset"))
         self.batch_out_entry.setToolTip("Running again into the same folder skips the cases that already finished")
         b_out = QPushButton("...")
         b_out.clicked.connect(lambda: self.open_dir(self.batch_out_entry))
+        h_out = QHBoxLayout()
         h_out.addWidget(self.batch_out_entry)
         h_out.addWidget(b_out)
-        gg.addLayout(h_out)
+        fr.addRow("Output Folder:", h_out)
         self.batch_rerun_check = QCheckBox("Re-run failed / timed-out cases")
-        gg.addWidget(self.batch_rerun_check)
+        self.batch_dry_check = QCheckBox("Dry run (SU2: write meshes and configs only)")
+        fr.addRow(self.batch_rerun_check)
+        fr.addRow(self.batch_dry_check)
         h_btn = QHBoxLayout()
         b_preview = QPushButton("Preview Cases")
         b_preview.clicked.connect(self.batch_preview)
-        self.batch_start_button = QPushButton("Generate Dataset")
+        self.batch_start_button = QPushButton("Run Batch")
         self.batch_start_button.setStyleSheet("background-color: #28a745; color: white; font-weight: bold;")
         self.batch_start_button.clicked.connect(self.batch_start)
         self.batch_stop_button = QPushButton("STOP")
@@ -1248,21 +1302,23 @@ class FalconApp(QMainWindow):
         b_open.clicked.connect(self.batch_open_folder)
         for b in (b_preview, self.batch_start_button, self.batch_stop_button, b_open):
             h_btn.addWidget(b)
-        gg.addLayout(h_btn)
+        fr.addRow(h_btn)
         self.batch_cases_label = QLabel("No cases yet")
         self.batch_cases_label.setWordWrap(True)
-        gg.addWidget(self.batch_cases_label)
         self.batch_progress_label = QLabel("Idle")
         self.batch_progress_label.setWordWrap(True)
-        gg.addWidget(self.batch_progress_label)
-        layout.addWidget(g_go, 2, 1)
-        layout.setColumnStretch(0, 1)
-        layout.setColumnStretch(1, 1)
+        fr.addRow(self.batch_cases_label)
+        fr.addRow(self.batch_progress_label)
+        lr.addWidget(g_run)
+        lr.addStretch()
 
         self._batch_stop_event = threading.Event()
         self._batch_thread = None
         self._batch_counts = {}
         self._batch_total = 0
+        self.batch_tabs.currentChanged.connect(lambda _: self._place_su2_cfg_panel())
+        self.tabs.currentChanged.connect(lambda _: self._place_su2_cfg_panel())
+        self.su2_tabs.currentChanged.connect(lambda _: self._place_su2_cfg_panel())
         self._batch_scan_folder()
         self._batch_update_enabled()
 
@@ -1272,44 +1328,66 @@ class FalconApp(QMainWindow):
             self.batch_folder_entry.setText(d)
             self._batch_scan_folder()
 
-    def _batch_airfoil_files(self):
+    def _batch_scan_folder(self):
+        folder = self.batch_folder_entry.text().strip()
+        files = sorted(f for f in os.listdir(folder)
+                       if f.lower().endswith(".dat") and os.path.isfile(os.path.join(folder, f))) \
+            if os.path.isdir(folder) else []
+        self.batch_airfoil_list.clear()
+        self.batch_airfoil_list.addItems(files)
+        self._batch_filter(self.batch_search.text())
+        self._batch_update_count()
+
+    def _batch_filter(self, text):
+        text = text.strip().lower()
+        for i in range(self.batch_airfoil_list.count()):
+            item = self.batch_airfoil_list.item(i)
+            item.setHidden(bool(text) and text not in item.text().lower())
+
+    def _batch_select_shown(self):
+        for i in range(self.batch_airfoil_list.count()):
+            item = self.batch_airfoil_list.item(i)
+            if not item.isHidden():
+                item.setSelected(True)
+
+    def _batch_update_count(self):
+        n = self.batch_airfoil_list.count()
         folder = self.batch_folder_entry.text().strip()
         if not os.path.isdir(folder):
-            return folder, []
-        return folder, sorted(f for f in os.listdir(folder)
-                              if f.lower().endswith(".dat") and os.path.isfile(os.path.join(folder, f)))
-
-    def _batch_scan_folder(self):
-        folder, files = self._batch_airfoil_files()
-        self.batch_file_list.clear()
-        self.batch_file_list.addItems(files)
-        if not os.path.isdir(folder):
-            self.batch_folder_label.setText("Folder not found")
+            self.batch_selected_label.setText("Folder not found")
         else:
-            self.batch_folder_label.setText(f"{len(files)} airfoil files (.dat) - all of them are run")
+            self.batch_selected_label.setText(f"{len(self.batch_airfoil_list.selectedItems())} of {n} selected")
 
     def _batch_update_enabled(self):
         su2 = self.batch_solver_combo.currentText() == "SU2"
-        self.batch_su2_group.setEnabled(su2)
-        for w in (self.batch_xfoil_entry, self.batch_workers_entry, self.batch_xfoil_timeout_entry):
-            w.setEnabled(not su2)
+        self.batch_tabs.setTabEnabled(1, not su2)
+        for i in (2, 3):
+            self.batch_tabs.setTabEnabled(i, su2)
         self.batch_npoints_entry.setEnabled(self.batch_repanel_check.isChecked())
-        mode = self.batch_settings_combo.currentIndex()
-        self.batch_su2_cfg_entry.setEnabled(mode == 2)
-        self.batch_max_iter_entry.setEnabled(mode == 2)
-        if mode == 0:
-            s = self.collect_su2_settings()
-            self.batch_settings_label.setText(
-                f"Uses SU2 Analysis > Solver Setup & Run as it is now: {self.flow_regime_combo.currentText()}, "
-                f"{s.get('SOLVER')}, {s.get('KIND_TURB_MODEL')}, {s.get('CONV_NUM_METHOD_FLOW')}, "
-                f"CFL {s.get('CFL_NUMBER')}, {s.get('ITER')} iterations, residual {s.get('CONV_RESIDUAL_MINVAL')} "
-                f"(read again when the run starts)")
-        elif mode == 1:
-            self.batch_settings_label.setText("Each case uses the template 'Load Recommended Settings' picks for its "
-                                              "Mach and Reynolds numbers")
-        else:
-            self.batch_settings_label.setText("Numerical settings copied verbatim from the file; FALCON replaces "
-                                              "only the flow conditions and file names")
+        self.batch_dry_check.setEnabled(su2)
+
+    def _place_su2_cfg_panel(self):
+        """Show the one SU2 Configuration panel in whichever tab is open: the Batch tab's solver-setup page or
+        SU2 Analysis > Solver Setup & Run."""
+        in_batch = self.tabs.currentWidget() is self.tab4 and self.batch_tabs.currentIndex() == 3
+        target = self.batch_ss_layout if in_batch else self.su2_setup_layout
+        if self.su2_cfg_group.parentWidget() is target.parentWidget():
+            return
+        source = self.su2_setup_layout if in_batch else self.batch_ss_layout
+        source.removeWidget(self.su2_cfg_group)
+        target.insertWidget(0, self.su2_cfg_group, stretch=2)
+        self.su2_cfg_group.show()
+
+    def _batch_load_recommended(self):
+        try:
+            re_ = self._parse_numbers(self.batch_su2_re_entry.text(), "Reynolds")[0]
+            mach = self._parse_numbers(self.batch_su2_mach_entry.text(), "Mach")[0]
+        except ValueError as e:
+            QMessageBox.warning(self, "Batch", str(e))
+            return
+        self.load_recommended_settings(mach=mach, reynolds=re_)
+        self._batch_update_enabled()
+        print(f"[Batch] Recommended settings for M {mach:g}, Re {re_:g} loaded into Solver Setup & Run")
 
     @staticmethod
     def _parse_numbers(text, name):
@@ -1329,22 +1407,29 @@ class FalconApp(QMainWindow):
         return values[0]
 
     def batch_cases(self):
-        """Every airfoil in the folder at every Reynolds and Mach number, checked for what the solver can run."""
-        folder, files = self._batch_airfoil_files()
+        """The selected airfoils at every Reynolds and Mach number, checked for what the solver can run."""
+        folder = self.batch_folder_entry.text().strip()
         if not os.path.isdir(folder):
             raise ValueError(f"Airfoil folder not found: {folder}")
+        files = sorted(item.text() for item in self.batch_airfoil_list.selectedItems())
         if not files:
-            raise ValueError(f"No .dat airfoil files in {folder}")
-        solver = self.batch_solver_combo.currentText().lower()
-        res = self._parse_numbers(self.batch_re_entry.text(), "Reynolds numbers")
-        machs = self._parse_numbers(self.batch_mach_entry.text(), "Mach numbers")
-        a_min = self._parse_one(self.batch_alpha_min_entry.text(), "Min AoA")
-        a_max = self._parse_one(self.batch_alpha_max_entry.text(), "Max AoA")
-        a_step = self._parse_one(self.batch_alpha_step_entry.text(), "AoA step")
+            raise ValueError("Select airfoils in 1. Parameterization (Ctrl+A selects all)")
+        su2 = self.batch_solver_combo.currentText() == "SU2"
+        if su2:
+            fields = (self.batch_su2_re_entry, self.batch_su2_mach_entry, self.batch_su2_amin_entry,
+                      self.batch_su2_amax_entry, self.batch_su2_astep_entry)
+        else:
+            fields = (self.batch_xf_re_entry, self.batch_xf_mach_entry, self.batch_xf_amin_entry,
+                      self.batch_xf_amax_entry, self.batch_xf_astep_entry)
+        res = self._parse_numbers(fields[0].text(), "Reynolds numbers")
+        machs = self._parse_numbers(fields[1].text(), "Mach numbers")
+        a_min = self._parse_one(fields[2].text(), "Min AoA")
+        a_max = self._parse_one(fields[3].text(), "Max AoA")
+        a_step = self._parse_one(fields[4].text(), "AoA step")
         repanel = self.batch_repanel_check.isChecked()
-        n_points = int(self._parse_one(self.batch_npoints_entry.text(), "Coordinates per surface")) if repanel else 200
+        n_points = int(self._parse_one(self.batch_npoints_entry.text(), "Desired points")) if repanel else 200
         y_plus = self._parse_one(self.batch_yplus_entry.text(), "Target y+")
-        mesh = "hybrid" if self.batch_mesh_combo.currentText() == "Hybrid" else "structured"
+        mesh = "hybrid" if self.batch_mesh_combo.currentText().startswith("Hybrid") else "structured"
         if a_max < a_min:
             raise ValueError("Max AoA is below Min AoA")
         if a_step <= 0 and a_max > a_min:
@@ -1352,17 +1437,17 @@ class FalconApp(QMainWindow):
         if any(r <= 0 for r in res):
             raise ValueError("Reynolds numbers must be positive")
         if repanel and n_points < 20:
-            raise ValueError("Coordinates per surface: use at least 20")
-        if solver == "xfoil":
+            raise ValueError("Desired points: use at least 20")
+        if not su2:
             if any(m >= 1.0 for m in machs):
                 raise ValueError("XFOIL runs only below Mach 1 (use SU2)")
             if repanel and n_points > XFOIL_MAX_POINTS_PER_SURFACE:
-                raise ValueError(f"{n_points} coordinates per surface gives {2 * n_points - 1} points; XFOIL loads "
-                                 f"at most 1000 (use {XFOIL_MAX_POINTS_PER_SURFACE} or fewer)")
-        elif self.batch_settings_combo.currentIndex() == 0 and self.flow_regime_combo.currentText() == "Incompressible":
-            if any(m >= 0.7 for m in machs):
-                raise ValueError("The Solver Setup tab is set to Incompressible, which cannot run Mach 0.7 or above "
-                                 "(switch it to Compressible, or use 'Recommended for each case')")
+                raise ValueError(f"{n_points} points per surface gives {2 * n_points - 1} points; XFOIL loads at "
+                                 f"most 1000 (use {XFOIL_MAX_POINTS_PER_SURFACE} or fewer)")
+        elif self.flow_regime_combo.currentText() == "Incompressible" and any(m >= 0.7 for m in machs):
+            raise ValueError("Solver Setup & Run is set to Incompressible, which cannot run Mach 0.7 or above "
+                             "(switch Flow Type to Compressible)")
+        solver = "su2" if su2 else "xfoil"
         return [Case(f, solver, r, m, a_min, a_max, a_step, n_points, y_plus, mesh, repanel)
                 for f in files for r in res for m in machs]
 
@@ -1380,24 +1465,11 @@ class FalconApp(QMainWindow):
         try:
             cases = self.batch_cases()
         except ValueError as e:
-            QMessageBox.warning(self, "Dataset Generation", str(e))
+            QMessageBox.warning(self, "Batch", str(e))
             return
         self._batch_update_enabled()
         self.batch_cases_label.setText(self._batch_describe(cases))
         print(f"[Batch] {self._batch_describe(cases)}")
-        if cases[0].solver == "xfoil" and not cases[0].repanel:
-            folder, _ = self._batch_airfoil_files()
-            big = [c.airfoil for c in cases if self._count_points(os.path.join(folder, c.airfoil)) > 1000]
-            if big:
-                print(f"[Batch] Warning: {len(set(big))} files have more than 1000 points, which XFOIL cannot "
-                      f"load; re-panel them or they will fail")
-
-    @staticmethod
-    def _count_points(path):
-        try:
-            return sum(1 for line in open(path, errors="replace") if len(line.split()) == 2)
-        except OSError:
-            return 0
 
     def batch_start(self):
         if self._batch_thread is not None and self._batch_thread.is_alive():
@@ -1407,19 +1479,12 @@ class FalconApp(QMainWindow):
             out_dir = self.batch_out_entry.text().strip()
             if not out_dir:
                 raise ValueError("Choose an output folder")
-            workers = int(self._parse_one(self.batch_workers_entry.text(), "Parallel XFOIL cases"))
-            cores = int(self._parse_one(self.batch_cores_entry.text(), "SU2 cores"))
+            workers = int(self._parse_one(self.batch_workers_entry.text(), "Parallel cases"))
             xfoil_timeout = self._parse_one(self.batch_xfoil_timeout_entry.text(), "XFOIL time limit")
             su2_hours = self._parse_one(self.batch_su2_timeout_entry.text(), "SU2 time limit")
-            su2_config, max_iter, su2_settings = None, None, None
-            mode = self.batch_settings_combo.currentIndex()
-            if cases[0].solver == "su2" and mode == 2:
-                su2_config = self.batch_su2_cfg_entry.text().strip()
-                if not su2_config or not os.path.isfile(su2_config):
-                    raise ValueError(f"SU2 .cfg file not found: {su2_config or '(none chosen)'}")
-                if self.batch_max_iter_entry.text().strip():
-                    max_iter = int(self._parse_one(self.batch_max_iter_entry.text(), "Max iterations"))
-            elif cases[0].solver == "su2" and mode == 0:
+            cores = int(self._parse_one(self.batch_cores_entry.text(), "Cores")) if self.batch_mpi_check.isChecked() else 1
+            su2_settings = None
+            if cases[0].solver == "su2":
                 su2_settings = {"regime": self.flow_regime_combo.currentText(),
                                 "settings": self.collect_su2_settings()}
             xfoil_path = self.batch_xfoil_entry.text().strip() or None
@@ -1427,10 +1492,10 @@ class FalconApp(QMainWindow):
                 if not (shutil.which(xfoil_path or "xfoil") or (xfoil_path and os.path.isfile(xfoil_path))):
                     raise ValueError(f"XFOIL executable not found: {xfoil_path}")
         except ValueError as e:
-            QMessageBox.warning(self, "Dataset Generation", str(e))
+            QMessageBox.warning(self, "Batch", str(e))
             return
 
-        folder, _ = self._batch_airfoil_files()
+        folder = self.batch_folder_entry.text().strip()
         os.makedirs(out_dir, exist_ok=True)
         # The case list and the SU2 settings go next to the results, so the batch can be resumed or re-run later.
         import csv
@@ -1443,8 +1508,7 @@ class FalconApp(QMainWindow):
                             f"{c.alpha_max:g}", f"{c.alpha_step:g}", c.n_points, f"{c.y_plus:g}", c.mesh,
                             "yes" if c.repanel else "no"])
         with open(os.path.join(out_dir, "batch_settings.json"), "w") as f:
-            json.dump({"airfoil_folder": folder, "su2_settings": su2_settings, "su2_config": su2_config,
-                       "max_iter": max_iter}, f, indent=1)
+            json.dump({"airfoil_folder": folder, "su2_settings": su2_settings, "cores": cores}, f, indent=1)
 
         self._batch_out_dir = out_dir
         self._batch_total = len(cases)
@@ -1458,8 +1522,9 @@ class FalconApp(QMainWindow):
 
         kwargs = dict(out_dir=out_dir, airfoil_dir=folder, xfoil_path=xfoil_path, cores=cores, workers=workers,
                       xfoil_timeout=float(xfoil_timeout), su2_timeout=float(su2_hours) * 3600.0,
-                      rerun_failed=self.batch_rerun_check.isChecked(), dry_run=self.batch_dry_check.isChecked(),
-                      su2_config=su2_config, max_iter=max_iter, su2_settings=su2_settings)
+                      rerun_failed=self.batch_rerun_check.isChecked(),
+                      dry_run=self.batch_dry_check.isChecked() and cases[0].solver == "su2",
+                      su2_settings=su2_settings)
 
         def log(message):
             print(f"[Batch] {message}")
@@ -1501,40 +1566,49 @@ class FalconApp(QMainWindow):
         self.batch_progress_label.setText(text)
 
     def on_batch_finished(self, stats, error_text):
+        """The batch summary goes to the console (log panel); no plots or dialogs."""
         self.batch_start_button.setEnabled(True)
         self.batch_stop_button.setEnabled(False)
         self._batch_refresh_label(running=False)
         out_dir = getattr(self, "_batch_out_dir", "")
         if error_text:
             print(f"[Batch] Failed: {error_text}")
-            QMessageBox.critical(self, "Dataset Generation", error_text)
             return
-        lines = []
+        head = "STOPPED" if self._batch_stop_event.is_set() else "FINISHED"
+        print(f"[Batch] ===================== Batch {head} =====================")
         for solver in ("xfoil", "su2"):
-            s = (stats or {}).get(solver)
-            if not s:
+            st = (stats or {}).get(solver)
+            if not st:
                 continue
-            rate = s.get("angle_convergence_rate")
-            lines.append(f"{solver.upper()}: {s['cases_run']} of {s['cases']} cases run, "
-                         f"{s['angles_converged']} of {s['angles_requested']} angles converged"
-                         + (f" ({100 * rate:.0f}%)" if rate is not None else "")
-                         + f", {s['core_hours']:.2f} core-hours")
-        stopped = self._batch_stop_event.is_set()
-        head = "Stopped." if stopped else "Finished."
-        summary = "\n".join(lines) or "No case ran."
-        print(f"[Batch] {head} {summary}")
-        print(f"[Batch] Results: {os.path.join(out_dir, 'results.csv')} (one row per angle), cases_summary.csv, "
+            rate = st.get("angle_convergence_rate")
+            states = ", ".join(f"{k} {v}" for k, v in sorted(st.get("cases_by_state", {}).items()))
+            print(f"[Batch] {solver.upper()}: {st['cases_run']} of {st['cases']} cases run ({states})")
+            print(f"[Batch]   angles converged: {st['angles_converged']} of {st['angles_requested']}"
+                  + (f" ({100 * rate:.0f}%)" if rate is not None else ""))
+            print(f"[Batch]   wall time {st['wall_hours']:.2f} h, {st['core_hours']:.2f} core-hours")
+        try:
+            import pandas as pd
+            cs = pd.read_csv(os.path.join(out_dir, "cases_summary.csv"))
+            bad = cs[~cs["state"].isin(["converged", "partial", "dry_run"])]
+            if len(bad):
+                print(f"[Batch] Not converged at any angle ({len(bad)}):")
+                for r in bad.head(20).itertuples():
+                    print(f"[Batch]   {r.airfoil}  Re {r.re:g}  M {r.mach:g}: {r.state}"
+                          + (f" - {r.error}" if isinstance(r.error, str) and r.error else ""))
+                if len(bad) > 20:
+                    print(f"[Batch]   ... and {len(bad) - 20} more (cases_summary.csv)")
+        except (OSError, KeyError, ValueError):
+            pass
+        print(f"[Batch] Results in {out_dir}: results.csv (one row per angle), cases_summary.csv, "
               f"batch_summary.json")
         excel = (stats or {}).get("excel")
         if excel:
             print(f"[Batch] Spreadsheet (one sheet per Reynolds number): {excel}")
-        QMessageBox.information(self, "Dataset Generation",
-                                f"{head}\n\n{summary}\n\nResults in:\n{out_dir}")
 
     def batch_open_folder(self):
         path = self.batch_out_entry.text().strip()
         if not os.path.isdir(path):
-            QMessageBox.information(self, "Dataset Generation", f"Folder does not exist yet:\n{path}")
+            QMessageBox.information(self, "Batch", f"Folder does not exist yet:\n{path}")
             return
         if os.name == "nt":
             os.startfile(path)
