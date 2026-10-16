@@ -8,6 +8,7 @@ The steps are the ones the GUI performs: CST and PARSEC fits with the lower-RMSE
 structured C-mesh, the solver settings the GUI loads for the case's Mach and Reynolds numbers, then XFOIL or SU2.
 """
 import csv
+import hashlib
 import json
 import math
 import multiprocessing
@@ -478,6 +479,19 @@ def _git_commit():
         return None
 
 
+def settings_fingerprint(su2_config=None, max_iter=None, su2_settings=None):
+    """Short id of the SU2 settings a batch runs with: the configuration file (and its iteration cap), the settings
+    from the GUI's Solver Setup tab, or - with neither - the automatic per-case selection."""
+    if su2_config:
+        with open(su2_config) as f:
+            payload = {"file": f.read(), "max_iter": max_iter}
+    elif su2_settings:
+        payload = {"regime": su2_settings.get("regime"), "settings": su2_settings.get("settings")}
+    else:
+        payload = {"auto": True}
+    return hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:12]
+
+
 def _status_path(out_dir, case):
     return os.path.join(out_dir, case.case_id, "status.json")
 
@@ -521,6 +535,8 @@ def _case_process(case_fields, out_dir, airfoil_dir, xfoil_path, cores, timeout,
     record = {"case": asdict(case), "case_id": case.case_id, "state": "running",
               "started": datetime.now().isoformat(timespec="seconds"), "falcon_commit": _git_commit(),
               "cores": cores if case.solver == "su2" else 1}
+    if case.solver == "su2":
+        record["settings_id"] = settings_fingerprint(su2_config, max_iter, su2_settings)
     _write_status(case_dir, record)
     start = time.time()
     try:
@@ -624,12 +640,21 @@ def run_batch(cases, out_dir, airfoil_dir, xfoil_path=None, cores=8, workers=4, 
     airfoil_dir = os.path.abspath(airfoil_dir)
     os.makedirs(out_dir, exist_ok=True)
 
+    # A finished SU2 case is only skipped when it ran with the settings of this batch. Status files written before
+    # settings were recorded count as the automatic selection.
+    wanted_id = settings_fingerprint(su2_config, max_iter, su2_settings)
+    auto_id = settings_fingerprint()
+
     pending = []
     for case in cases:
-        state = (read_status(out_dir, case) or {}).get("state")
+        status = read_status(out_dir, case) or {}
+        state = status.get("state")
         if state in FINAL_STATES and not (rerun_failed and state in RETRY_STATES):
-            log(f"[skip] {case.case_id} ({state})")
-            continue
+            if case.solver == "su2" and (status.get("settings_id") or auto_id) != wanted_id:
+                log(f"[rerun] {case.case_id}: finished with different SU2 settings ({state})")
+            else:
+                log(f"[skip] {case.case_id} ({state})")
+                continue
         pending.append(case)
 
     xfoil_cases = [c for c in pending if c.solver == "xfoil"]

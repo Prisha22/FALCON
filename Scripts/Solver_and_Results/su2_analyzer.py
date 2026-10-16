@@ -35,6 +35,15 @@ COLOR_MESH_EDGES = 'black'
 COLOR_BG_WHITE = 'white'
 COLOR_BG_BLACK = 'black'
 
+# Regime thresholds and defaults (see low_re.cfg, high_re.cfg, Transonic.cfg, supersonic.cfg).
+DEFAULT_CFL = 10.0           # default CFL_NUMBER for incompressible runs
+DEFAULT_CFL_COMPRESSIBLE = 1.0  # default CFL_NUMBER for compressible runs (low-Re, transonic, supersonic)
+DEFAULT_MAX_ITER = 5000      # default ITER (steady) / TIME_ITER (unsteady)
+LOW_RE_CFL = 5.0             # low-Re profile default CFL_NUMBER
+LOW_RE_MAX_ITER = 10000      # low-Re profile default TIME_ITER
+LOW_RE_LIMIT = 1e5           # Re < 1e5  -> low-Re profile (low_re.cfg)
+TRANSITION_RE_MAX = 1e6      # 1e5 <= Re <= 1e6 -> LM transition model is switched on; above that it is off
+
 SU2_COMPRESSIBLE_SETTINGS = {
     'SOLVER': ['RANS', 'NAVIER_STOKES', 'EULER'],
     'KIND_TURB_MODEL': ['SA', 'SST', 'NONE', 'SA_NEG'],
@@ -72,6 +81,33 @@ def template_passthrough(template, applied):
     options, JST coefficients, time step, ...): everything not already applied to a widget and not a case key."""
     return {k: v for k, v in template.items()
             if k not in applied and k not in TEMPLATE_CASE_KEYS and not k.startswith("MARKER_")}
+
+
+def classify_regime(flow_regime: str, mach: float, reynolds: float) -> Dict[str, bool]:
+    """Which cfg profile applies: supersonic / transonic / low-Re (compressible, M<0.7, Re<1e5) / the rest."""
+    compressible = flow_regime.lower() == "compressible"
+    is_transonic = compressible and 0.7 <= mach < 1.0
+    is_supersonic = compressible and mach >= 1.0
+    is_incompressible = flow_regime.lower() == "incompressible"
+    is_low_re = compressible and not is_transonic and not is_supersonic and reynolds < LOW_RE_LIMIT
+    return {
+        "transonic": is_transonic,
+        "supersonic": is_supersonic,
+        "incompressible": is_incompressible,
+        "low_re": is_low_re,
+        "unsteady": is_transonic or is_low_re,  # both profiles use dual time stepping
+    }
+
+
+def resolve_transition_model(gui_settings: dict, reynolds: float, is_transonic: bool, is_supersonic: bool) -> str:
+    """LM is on for Re <= 1e6 (forced for 1e5 <= Re <= 1e6) and off above 1e6 / in the transonic and supersonic
+    profiles unless the GUI asks for it explicitly."""
+    if is_transonic or is_supersonic:
+        return gui_settings.get('KIND_TRANS_MODEL', 'NONE')
+    if LOW_RE_LIMIT <= reynolds <= TRANSITION_RE_MAX:
+        return 'LM'
+    default = 'LM' if reynolds < LOW_RE_LIMIT else 'NONE'
+    return gui_settings.get('KIND_TRANS_MODEL', default)
 
 
 SU2_INCOMPRESSIBLE_SETTINGS = {
@@ -300,9 +336,17 @@ def prepare_su2_config(
 ) -> Optional[str]:
     print(f"Preparing SU2 config for AoA={aoa:.2f}, Re={reynolds}, M={mach}, Regime={flow_regime}")
 
-    is_transonic = flow_regime.lower() == "compressible" and 0.7 <= mach < 1.0
-    is_supersonic = flow_regime.lower() == "compressible" and mach >= 1.0
-    is_incompressible = flow_regime.lower() == "incompressible"
+    regime = classify_regime(flow_regime, mach, reynolds)
+    is_transonic = regime["transonic"]
+    is_supersonic = regime["supersonic"]
+    is_incompressible = regime["incompressible"]
+    is_low_re = regime["low_re"]
+    is_unsteady = regime["unsteady"]
+    print(f"Profile: {'supersonic' if is_supersonic else 'transonic' if is_transonic else 'low_re' if is_low_re else 'high_re' if is_incompressible or reynolds >= LOW_RE_LIMIT else 'default'}")
+
+    # LM freestream defaults: low_re.cfg uses 0.003 / 2.0, high_re.cfg uses 0.001 / 3.0
+    lm_ti_default = 0.003 if is_low_re else 0.001
+    lm_ratio_default = 2.0 if is_low_re else 3.0
 
     config_lines = [
         "% ------------- DIRECT, ADJOINT, AND LINEARIZED PROBLEM DEFINITION ------------%",
@@ -337,7 +381,10 @@ def prepare_su2_config(
     if is_incompressible:
         solver = gui_settings.get('SOLVER', 'INC_RANS')
         turb_model = gui_settings.get('KIND_TURB_MODEL', 'SST')
-        trans_model = gui_settings.get('KIND_TRANS_MODEL', 'NONE')
+        trans_model = resolve_transition_model(gui_settings, reynolds, is_transonic, is_supersonic)
+        if trans_model == 'LM' and turb_model != 'SST':
+            print(f"[Config] LM transition requires SST; switching KIND_TURB_MODEL {turb_model} -> SST")
+            turb_model = 'SST'
 
         config_lines.extend([
             f"SOLVER= {solver}",
@@ -353,8 +400,8 @@ def prepare_su2_config(
             config_lines.extend([
                 f"KIND_TRANS_MODEL= {trans_model}",
                 f"LM_OPTIONS= {gui_settings.get('LM_OPTIONS', '(MENTER_LANGTRY, MENTER_LANGTRY, NONE)')}",
-                f"FREESTREAM_TURBULENCEINTENSITY= {gui_settings.get('FREESTREAM_TURBULENCEINTENSITY', 0.10)}",
-                f"FREESTREAM_TURB2LAMVISCRATIO= {gui_settings.get('FREESTREAM_TURB2LAMVISCRATIO', 4.0)}",
+                f"FREESTREAM_TURBULENCEINTENSITY= {gui_settings.get('FREESTREAM_TURBULENCEINTENSITY', lm_ti_default)}",
+                f"FREESTREAM_TURB2LAMVISCRATIO= {gui_settings.get('FREESTREAM_TURB2LAMVISCRATIO', lm_ratio_default)}",
                 f"FREESTREAM_INTERMITTENCY= {gui_settings.get('FREESTREAM_INTERMITTENCY', 1.0)}"
             ])
 
@@ -390,7 +437,10 @@ def prepare_su2_config(
     else:
         solver = gui_settings.get('SOLVER', 'RANS')
         turb_model = gui_settings.get('KIND_TURB_MODEL', 'SST' if is_supersonic else 'SA')
-        trans_model = gui_settings.get('KIND_TRANS_MODEL', 'NONE')
+        trans_model = resolve_transition_model(gui_settings, reynolds, is_transonic, is_supersonic)
+        if trans_model == 'LM' and turb_model != 'SST':
+            print(f"[Config] LM transition requires SST; switching KIND_TURB_MODEL {turb_model} -> SST")
+            turb_model = 'SST'
 
         config_lines.extend([
             f"SOLVER= {solver}",
@@ -406,8 +456,8 @@ def prepare_su2_config(
                 f"FREESTREAM_NU_FACTOR= {gui_settings.get('FREESTREAM_NU_FACTOR', 4.0)}",
                 f"KIND_TRANS_MODEL= {trans_model}",
                 f"LM_OPTIONS= {gui_settings.get('LM_OPTIONS', '(MENTER_LANGTRY, MENTER_LANGTRY, NONE)')}",
-                f"FREESTREAM_TURBULENCEINTENSITY= {gui_settings.get('FREESTREAM_TURBULENCEINTENSITY', 0.10)}",
-                f"FREESTREAM_TURB2LAMVISCRATIO= {gui_settings.get('FREESTREAM_TURB2LAMVISCRATIO', 4.0)}",
+                f"FREESTREAM_TURBULENCEINTENSITY= {gui_settings.get('FREESTREAM_TURBULENCEINTENSITY', lm_ti_default)}",
+                f"FREESTREAM_TURB2LAMVISCRATIO= {gui_settings.get('FREESTREAM_TURB2LAMVISCRATIO', lm_ratio_default)}",
                 f"FREESTREAM_INTERMITTENCY= {gui_settings.get('FREESTREAM_INTERMITTENCY', 1.0)}"
             ])
 
@@ -438,7 +488,7 @@ def prepare_su2_config(
             ""
         ])
 
-    ref_area = gui_settings.get('REF_AREA', 1.0 if is_supersonic else 0 if is_transonic else 1.0)
+    ref_area = gui_settings.get('REF_AREA', 0 if (is_transonic or is_low_re) else 1.0)
 
     config_lines.extend([
         "% ---------------------- REFERENCE VALUE DEFINITION ---------------------------%",
@@ -459,12 +509,12 @@ def prepare_su2_config(
         config_lines.append("MARKER_DESIGNING= ( Airfoil )")
     config_lines.append("")
 
-    if is_transonic:
+    if is_unsteady:
         config_lines.extend([
             "% DISCRETIZATION",
             "TIME_DOMAIN= YES",
             "TIME_MARCHING= DUAL_TIME_STEPPING-2ND_ORDER",
-            f"TIME_STEP= {gui_settings.get('TIME_STEP', 5e-4)}",
+            f"TIME_STEP= {gui_settings.get('TIME_STEP', 5e-5 if is_low_re else 5e-4)}",
             ""
         ])
 
@@ -473,13 +523,15 @@ def prepare_su2_config(
         f"NUM_METHOD_GRAD= {gui_settings.get('NUM_METHOD_GRAD', 'WEIGHTED_LEAST_SQUARES')}"
     ])
 
-    conv_method = gui_settings.get('CONV_NUM_METHOD_FLOW', 'ROE' if is_supersonic else 'JST')
+    conv_method = gui_settings.get('CONV_NUM_METHOD_FLOW', 'ROE' if is_supersonic else 'LMROE' if is_low_re else 'JST')
 
     if is_transonic and conv_method == 'JST':
         jst_coeff = gui_settings.get('JST_SENSOR_COEFF', '( 0.5, 0.005 )')
         config_lines.append(f"JST_SENSOR_COEFF= {jst_coeff}")
 
     config_lines.append(f"CONV_NUM_METHOD_FLOW= {conv_method}")
+    if conv_method == 'LMROE':
+        config_lines.append(f"LOW_MACH_PREC= {gui_settings.get('LOW_MACH_PREC', 'YES')}")
 
     is_central = conv_method in ['JST', 'JST_KE', 'JST_MAT', 'LAX_FRIEDRICH']
     if is_supersonic:
@@ -493,7 +545,7 @@ def prepare_su2_config(
     config_lines.append(f"SLOPE_LIMITER_FLOW= {slope_limiter}")
     config_lines.append("CONV_NUM_METHOD_TURB= SCALAR_UPWIND")
 
-    muscl_turb = gui_settings.get('MUSCL_TURB', 'NO' if is_supersonic else 'YES')
+    muscl_turb = gui_settings.get('MUSCL_TURB', 'NO' if (is_supersonic or is_transonic) else 'YES')
     config_lines.append(f"MUSCL_TURB= {muscl_turb}")
     config_lines.append("")
 
@@ -504,7 +556,7 @@ def prepare_su2_config(
     ])
 
     if is_supersonic:
-        cfl_number = gui_settings.get('CFL_NUMBER', 0.5)
+        cfl_number = gui_settings.get('CFL_NUMBER', DEFAULT_CFL_COMPRESSIBLE)
         cfl_adapt_param = gui_settings.get('CFL_ADAPT_PARAM', '( 0.5, 1.1, 0.5, 15.0 )')
         config_lines.extend([
             f"CFL_NUMBER= {cfl_number}",
@@ -513,12 +565,18 @@ def prepare_su2_config(
         ])
     elif is_transonic:
         config_lines.extend([
-            f"CFL_NUMBER= {gui_settings.get('CFL_NUMBER', 1.0)}",
+            f"CFL_NUMBER= {gui_settings.get('CFL_NUMBER', DEFAULT_CFL_COMPRESSIBLE)}",
             "CFL_ADAPT= YES"
+        ])
+    elif is_low_re:
+        config_lines.extend([
+            f"CFL_NUMBER= {gui_settings.get('CFL_NUMBER', LOW_RE_CFL)}",
+            "CFL_ADAPT= YES",
+            f"CFL_ADAPT_PARAM= {gui_settings.get('CFL_ADAPT_PARAM', '( 0.5, 1.1, 1.0, 50.0 )')}"
         ])
     else:
         config_lines.extend([
-            f"CFL_NUMBER= {gui_settings.get('CFL_NUMBER', 25.0 if is_incompressible else 40.0)}",
+            f"CFL_NUMBER= {gui_settings.get('CFL_NUMBER', DEFAULT_CFL if is_incompressible else DEFAULT_CFL_COMPRESSIBLE)}",
             "CFL_ADAPT= NO",
             "RK_ALPHA_COEFF= (0.66667, 0.66667, 1.0)"
         ])
@@ -533,6 +591,9 @@ def prepare_su2_config(
     elif is_transonic:
         linear_solver_error = gui_settings.get('LINEAR_SOLVER_ERROR', 0.1)
         linear_solver_iter = gui_settings.get('LINEAR_SOLVER_ITER', 50)
+    elif is_low_re:
+        linear_solver_error = gui_settings.get('LINEAR_SOLVER_ERROR', 0.001)
+        linear_solver_iter = gui_settings.get('LINEAR_SOLVER_ITER', 25)
     else:
         linear_solver_error = gui_settings.get('LINEAR_SOLVER_ERROR', 1e-8)
         linear_solver_iter = gui_settings.get('LINEAR_SOLVER_ITER', 10)
@@ -553,10 +614,12 @@ def prepare_su2_config(
             ""
         ])
 
-    iter_val = gui_settings.get('ITER', gui_settings.get('EXT_ITER', 3000))
+    iter_val = gui_settings.get('ITER', gui_settings.get('EXT_ITER',
+                                                      LOW_RE_MAX_ITER if is_low_re else DEFAULT_MAX_ITER))
 
     user_conv_field = gui_settings.get('CONV_FIELD')
-    user_min_val_raw = gui_settings.get('CONV_RESIDUAL_MINVAL', "-8.0")
+    default_min_val = "-4" if is_transonic else "-6" if is_supersonic else "-8.0"
+    user_min_val_raw = gui_settings.get('CONV_RESIDUAL_MINVAL', default_min_val)
 
     if isinstance(user_min_val_raw, str):
         user_min_val = user_min_val_raw.strip()
@@ -587,9 +650,21 @@ def prepare_su2_config(
             f"CONV_WINDOW_CAUCHY_ELEMS= {gui_settings.get('CONV_WINDOW_CAUCHY_ELEMS', 10)}",
             ""
         ])
+    elif is_low_re:
+        config_lines.extend([
+            "% --------------------------- INNER CONVERGENCE -------------------------------%",
+            f"INNER_ITER= {gui_settings.get('INNER_ITER', 30)}",
+            f"CONV_FIELD= {user_conv_field if user_conv_field else 'RMS_DENSITY'}",
+            f"CONV_RESIDUAL_MINVAL= {user_min_val}",
+            "CONV_STARTITER= 0",
+            "",
+            "% ---------------------------- TIME CONVERGENCE -------------------------------%",
+            f"TIME_ITER= {iter_val}",
+            ""
+        ])
     else:
         if is_supersonic:
-            default_field = 'RMS_DENSITY'
+            default_field = 'RMS_DENSITY, RMS_TKE'
             conv_startiter = gui_settings.get('CONV_STARTITER', 25)
         else:
             default_field = 'RMS_PRESSURE' if is_incompressible else 'RMS_DENSITY'
@@ -618,6 +693,11 @@ def prepare_su2_config(
             "INNER_ITER, RMS_DENSITY, RMS_MOMENTUM-X, RMS_MOMENTUM-Y, "
             "RMS_PRESSURE, LIFT, DRAG, Y_PLUS"
         )
+    elif is_low_re:
+        screen_output = (
+            "TIME_ITER, INNER_ITER, RMS_DENSITY, RMS_MOMENTUM-X, RMS_MOMENTUM-Y, "
+            "RMS_ENERGY, LIFT, DRAG, MOMENT"
+        )
     else:
         screen_output = (
             "INNER_ITER, RMS_DENSITY, RMS_MOMENTUM-X, RMS_MOMENTUM-Y, "
@@ -635,6 +715,14 @@ def prepare_su2_config(
     config_lines.extend([
         "% ------------------------- INPUT/OUTPUT INFORMATION --------------------------%",
         f"OUTPUT_FILES= {output_files}",
+    ])
+    if is_low_re:
+        config_lines.extend([
+            f"OUTPUT_WRT_FREQ= {gui_settings.get('OUTPUT_WRT_FREQ', 200)}",
+            f"HISTORY_WRT_FREQ_TIME= {gui_settings.get('HISTORY_WRT_FREQ_TIME', 100)}",
+            f"HISTORY_WRT_FREQ_INNER= {gui_settings.get('HISTORY_WRT_FREQ_INNER', 0)}",
+        ])
+    config_lines.extend([
         f"MESH_FILENAME= {mesh_filename}",
         "MESH_FORMAT= SU2",
         "MESH_OUT_FILENAME= mesh_out.su2",
@@ -1216,8 +1304,7 @@ def execute_su2_analysis_workflow(
     su2_runner.stop_requested = False
     all_sim_results = []
 
-    is_transonic = flow_regime.lower() == "compressible" and 0.7 <= mach < 1.0
-    is_unsteady = is_transonic
+    is_unsteady = classify_regime(flow_regime, mach, reynolds)["unsteady"]
 
     current_run_timestamp_dir = os.path.join(
         base_output_dir,
