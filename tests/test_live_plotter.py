@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-pytest.importorskip("PyQt6")  # live_plotter imports Qt at module level
+pytest.importorskip("PyQt6.QtWidgets", exc_type=ImportError)  # live_plotter imports Qt at module level; skip if Qt libraries are missing
 from Scripts.Solver_and_Results.live_plotter import data_reader_thread, history_candidates  # noqa: E402
 
 CSV_1 = '"Inner_Iter","rms[P]","CL"\n0,-1.0,0.1\n'
