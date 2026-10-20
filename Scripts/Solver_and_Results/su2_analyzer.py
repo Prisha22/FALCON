@@ -124,6 +124,26 @@ SU2_INCOMPRESSIBLE_SETTINGS = {
 }
 
 
+def su2_output_candidates(output_dir: str, base: str, ext: str) -> List[str]:
+    """Paths SU2 may have written for a configured file name.
+
+    SU2 8 treats everything after the last '.' of a configured name as an extension and drops it, so
+    'history_aoa_2.00' is written as 'history_aoa_2.csv'; older versions keep 'history_aoa_2.00.csv'.
+    """
+    names = [base + ext]
+    if '.' in base:
+        names.append(base[:base.rfind('.')] + ext)
+    return [os.path.join(output_dir, n) for n in names]
+
+
+def find_su2_output(output_dir: str, base: str, ext: str) -> Optional[str]:
+    """The file SU2 wrote for a configured name (either spelling), or None."""
+    for path in su2_output_candidates(output_dir, base, ext):
+        if os.path.exists(path):
+            return path
+    return None
+
+
 class SU2Runner:
     """Manages the execution of SU2 simulations (serial or MPI)."""
 
@@ -321,6 +341,14 @@ class SU2Runner:
         if solution_files and len(solution_files) > 1:
             solution_files.sort(key=os.path.getmtime, reverse=True)
             actual_solution_file = solution_files[0]
+
+        # Newer SU2 versions drop the '.00' of 'history_aoa_2.00' etc.; fall back to the name actually written.
+        actual_history_file = find_su2_output(output_dir, f"history_aoa_{formatted_aoa_for_output}", ".csv") \
+            or actual_history_file
+        actual_surface_file = actual_surface_file or find_su2_output(
+            output_dir, f"surf_aoa_{formatted_aoa_for_output}", ".csv")
+        actual_solution_file = actual_solution_file or find_su2_output(
+            output_dir, f"flow_aoa_{formatted_aoa_for_output}", ".vtu")
 
         return "COMPLETED", actual_history_file, actual_solution_file, actual_surface_file
 
@@ -847,9 +875,9 @@ def save_cp_vs_chord_plot(aoa: float, output_folder: str):
     csv_files = glob.glob(csv_pattern)
 
     if not csv_files:
-        csv_pattern_fallback = os.path.join(output_folder, f"surf_aoa_{formatted_aoa}.csv")
-        if os.path.exists(csv_pattern_fallback):
-            csv_files = [csv_pattern_fallback]
+        exact = find_su2_output(output_folder, f"surf_aoa_{formatted_aoa}", ".csv")
+        if exact:
+            csv_files = [exact]
 
     if not csv_files:
         print(f"ERROR: No surface CSV files found in {output_folder}")

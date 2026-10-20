@@ -1,0 +1,57 @@
+{
+ "case": {
+  "airfoil": "naca0012.dat",
+  "solver": "su2",
+  "reynolds": 500000.0,
+  "mach": 0.1,
+  "alpha_min": 2,
+  "alpha_max": 2,
+  "alpha_step": 0,
+  "n_points": 200,
+  "y_plus": 30.0,
+  "mesh": "structured",
+  "repanel": false
+ },
+ "case_id": "su2_naca0012_Re500000_M0.1_a2_2_0_raw",
+ "state": "failed",
+ "started": "2026-10-20T12:50:21",
+ "falcon_commit": "e903ac8",
+ "cores": 1,
+ "settings_id": "b87dd8037b40",
+ "geometry": {
+  "method": "none (file coordinates)",
+  "n_coordinates": 199
+ },
+ "regime": "Incompressible",
+ "template": "GUI Solver Setup tab",
+ "settings": {
+  "ITER": "5",
+  "EXT_ITER": "5"
+ },
+ "mesh": {
+  "type": "structured",
+  "cells": 337849,
+  "design_yplus_median": 28.906467859466304,
+  "design_yplus_max": 29.00152693854822
+ },
+ "points": [
+  {
+   "alpha": 2.0,
+   "run_status": "COMPLETED",
+   "wall_s": 99.4,
+   "converged": false,
+   "state": "max_iterations",
+   "cl": 0.2723439049,
+   "cd": 0.2767110202,
+   "cm": 0.06969268735,
+   "iterations": 5,
+   "final_residual": null,
+   "yplus_max": 22.842313766479492,
+   "yplus_median": 22.23599624633789
+  }
+ ],
+ "timed_out": false,
+ "dry_run": false,
+ "wall_s": 112.8,
+ "finished": "2026-10-20T12:52:14"
+}

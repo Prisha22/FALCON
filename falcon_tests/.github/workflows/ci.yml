@@ -1,0 +1,24 @@
+name: tests
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    env:
+      MPLBACKEND: Agg
+      QT_QPA_PLATFORM: offscreen
+      PYVISTA_OFF_SCREEN: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y libgl1 libglu1-mesa libxrender1 libxcursor1 libxft2 libxinerama1 libfontconfig1 xvfb
+      - run: pip install -r requirements.txt pytest openpyxl
+      - run: xvfb-run -a pytest -m "not slow" -v

@@ -98,14 +98,27 @@ class LivePlotterWindow(QWidget):
         super().closeEvent(event)
 
 
+def history_candidates(history_filepath: str):
+    """Names SU2 may have given the history file. SU2 8 drops the last '.xx' of a configured name, so
+    'history_aoa_2.00.csv' is written as 'history_aoa_2.csv'; older versions keep it."""
+    base, ext = os.path.splitext(history_filepath)
+    folder, name = os.path.split(base)
+    candidates = [history_filepath]
+    if '.' in name:
+        candidates.append(os.path.join(folder, name[:name.rfind('.')] + ext))
+    return candidates
+
+
 def data_reader_thread(history_filepath: str, data_queue: Queue, stop_event, polling_interval: float = 0.5):
     """Background thread that tails the CSV file."""
     last_known_rows = 0
+    candidates = history_candidates(history_filepath)
 
     while not stop_event.is_set():
-        if os.path.exists(history_filepath) and os.path.getsize(history_filepath) > 0:
+        path = next((p for p in candidates if os.path.exists(p) and os.path.getsize(p) > 0), None)
+        if path:
             try:
-                df = pd.read_csv(history_filepath)
+                df = pd.read_csv(path)
                 if len(df) > last_known_rows:
                     last_known_rows = len(df)
                     df.columns = df.columns.str.strip().str.replace('"', '')
