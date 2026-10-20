@@ -3,14 +3,20 @@ from scipy.interpolate import splprep, splev
 import numpy as np
 
 
-def calculate_boundary_layer_thickness(Re, M, y_plus=1.0):
-    #Calculate first cell thickness based on Reynolds number, Mach number, and target y+.
+# One first-cell formula for both meshers: the Re-based one in meshing.py (the SU2 config sets the viscosity from
+# Re with REYNOLDS_LENGTH = 1). The dimensional sea-level-air formula this file used before gave a wall cell about
+# 4.6x too thin at Re 5e5 (design y+ 0.22 for a target of 1).
+from Scripts.Meshing.meshing import calculate_boundary_layer_thickness  # noqa: E402,F401
 
-    cf = (2 * np.log10(float(Re)) - .65) ** -2.3  # Skin friction coefficient
-    tau_w = cf * .5 * 1.225 * (float(M) * 341.348) ** 2  # Wall shear stress
-    u_star = np.sqrt(tau_w / 1.225)
-    y = y_plus * (1.813e-5) / (1.225 * u_star)  # First cell thickness
-    return y
+BL_RATIO = 1.04            # growth ratio of the boundary-layer layers
+BL_MIN_THICKNESS = 0.001   # boundary-layer thickness used when it already holds enough layers
+BL_MIN_LAYERS = 15         # at low Re the wall cell is large, so the layer stack is thickened to keep this many
+
+
+def boundary_layer_thickness(first_cell, ratio=BL_RATIO, min_layers=BL_MIN_LAYERS, min_thickness=BL_MIN_THICKNESS):
+    """Total thickness of the structured layer stack: 1e-3 chord, or more when that would hold fewer than
+    `min_layers` layers of the given first cell and growth ratio."""
+    return max(min_thickness, first_cell * (ratio ** min_layers - 1.0) / (ratio - 1.0))
 
 
 def generate_hybrid(upper_surface, lower_surface, Re, M, y_plus=1.0, show_graphics: bool = True,
@@ -87,9 +93,9 @@ def generate_hybrid(upper_surface, lower_surface, Re, M, y_plus=1.0, show_graphi
     boundary_layer_field_id = gmsh.model.mesh.field.add("BoundaryLayer")
     gmsh.model.mesh.field.setNumbers(boundary_layer_field_id, "CurvesList", [af_upper, af_lower])
     gmsh.model.mesh.field.setNumber(boundary_layer_field_id, "Size", first_cell_thickness)
-    gmsh.model.mesh.field.setNumber(boundary_layer_field_id, "Thickness", 0.001)
+    gmsh.model.mesh.field.setNumber(boundary_layer_field_id, "Thickness", boundary_layer_thickness(first_cell_thickness))
     gmsh.model.mesh.field.setNumber(boundary_layer_field_id, "SizeFar", 0.0009)
-    gmsh.model.mesh.field.setNumber(boundary_layer_field_id, "Ratio", 1.04)
+    gmsh.model.mesh.field.setNumber(boundary_layer_field_id, "Ratio", BL_RATIO)
     gmsh.model.mesh.field.setNumber(boundary_layer_field_id, "Quads", 1)
     gmsh.option.setNumber('Mesh.BoundaryLayerFanElements', 10)
     gmsh.model.mesh.field.setNumbers(boundary_layer_field_id, 'FanPointsList', [1])

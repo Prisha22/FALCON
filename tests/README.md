@@ -1,17 +1,6 @@
 # FALCON tests
 
-Copy everything in this folder into the **root of your FALCON repository**, so you end up with:
-
-    your_repo/
-      Scripts/
-      Configuration_Files/
-      tests/                  <- from this folder
-      pytest.ini              <- from this folder
-      requirements-dev.txt    <- from this folder
-      .github/workflows/ci.yml  <- from this folder
-
-If your repo already has a `tests/` folder (for example `tests/test_batch_runner.py`), copy the new files into it
-and keep both.
+FALCON now has an automated test suite of 95 tests, written with pytest and run on every push by GitHub Actions. The fast tests take about 3 minutes. Tests that need external solvers are marked slow, and they skip themselves when SU2 or XFOIL isn’t installed. These tests verify if the code is working as intended for the current version. These only check the workflow on the software side and do not check accuracy of the results here. Head to Examples directory for validation cases and aerodynamic accuracy.
 
 ## Run the tests
 
