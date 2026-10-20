@@ -1,46 +1,79 @@
-# FALCON tests
+## Framework for Airfoil CFD and Analysis Optimization (FALCON)
+<a name="top"></a>
 
-Copy everything in this folder into the **root of your FALCON repository**, so you end up with:
+[![OS](https://img.shields.io/badge/OS-linux%2C%20windows%2C%20macOS-0078D4)]()
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-    your_repo/
-      Scripts/
-      Configuration_Files/
-      tests/                  <- from this folder
-      pytest.ini              <- from this folder
-      requirements-dev.txt    <- from this folder
-      .github/workflows/ci.yml  <- from this folder
+:star: Star us on GitHub - it is what keeps us going!
 
-If your repo already has a `tests/` folder (for example `tests/test_batch_runner.py`), copy the new files into it
-and keep both.
+### About
 
-## Run the tests
+FALCON is an open-source Python-based GUI framework designed to facilitate airfoil design, analysis, and optimization. It integrates airfoil parametrization techniques (CST and PARSEC), low-fidelity aerodynamic analysis using XFOIL, automated meshing with GMSH, and high-fidelity CFD simulations via SU2 (with automated post processing). The framework aims to streamline the airfoil design process by providing a user-friendly interface and automating various stages of analysis and optimization.
 
-    pip install -r requirements.txt -r requirements-dev.txt
-    python -m pytest -m "not slow"      # fast tests, about 30 s
-    python -m pytest -m slow            # hybrid mesh, plus real SU2 / XFOIL runs if those programs are installed
+### Features
 
-Passing tests print a dot, failing tests print what differed. Skipped tests (s) need something that is not
-installed, for example SU2_CFD or XFOIL.
+* User-friendly and easily accesible GUI.
 
-## What is covered
+* Airfoil parametrization using CST and PARSEC techniques.
 
-| File | What it tests |
-|---|---|
-| test_su2_config.py | SU2 config generation for low-Re, high-Re, transonic and supersonic; defaults; user values win |
-| test_solver_parsing.py | SU2 history files: coefficients, converged / diverged / max-iterations / missing |
-| test_batch_logic.py | case list, alpha ranges, config-from-file, re-run when settings change |
-| test_geometry.py | coordinate reading, normalization, CST and PARSEC fits, spline re-paneling |
-| test_xfoil.py | XFOIL geometry cleaning, argument checks, polar and Cp parsing (with a stand-in xfoil) |
-| test_live_plotter.py | the live-plot history reader, including SU2 8 file naming |
-| test_mesh.py | first-cell formula, wall spacing, structured and hybrid mesh files |
-| test_smoke.py | small end-to-end dry run; optional real SU2 and XFOIL runs |
+* Embedded XFOIL for low-fidelity aerodynamic analysis.
 
-## If a test fails on your machine
+* Automated meshing using GMSH
 
-- `No module named 'Scripts.Batch'` (or `Scripts.Geometry`, ...) - Python found a different folder called `Scripts`
-  (Windows: Python's own `Scripts` folder). `tests/conftest.py` now puts your repo root first on the import path; make
-  sure you are using this version, and run `python -m pytest` from the repo root.
-- Delete old copies of test files lying loose in the repo root (for example `test_mesh.py`, `test_smoke.py`).
-- Import errors for `gmsh` on Linux - install `libglu1-mesa`.
-- The import paths must match your folders: `Scripts.Batch.batch_runner`, `Scripts.Solver_and_Results.su2_analyzer`,
-  `Scripts.Geometry`, `Scripts.Meshing`. Add an empty `Scripts/Batch/__init__.py` if it is missing.
+* CFD analyses via SU2 with automated post-processing.
+
+* Validated solver settings are pre-chosen on the basis of the given initial conditions.
+
+* Real-time residual monitoring
+
+### Pre-requisites
+
+* SU2 $\rightarrow$ https://su2code.github.io/ $\rightarrow$ Can be installed with or without MPI. Add the address of the folder containing the SU2_CFD executable (bin folder) to the system's PATH variable.
+
+* Microsoft MPI $\rightarrow$ https://www.microsoft.com/en-us/download/details.aspx?id=100593 $\rightarrow$ Verify that the path of the executable is stored in the system's PATH.
+
+* XFoil $\rightarrow$ https://web.mit.edu/drela/Public/web/xfoil/ 
+
+* Python $\rightarrow$ https://www.python.org/downloads/ $\rightarrow$ Python 3.11 and above versions are recommended for stable performance.
+
+* Python specific packages $\rightarrow$
+
+    - numpy (version < 2.0)
+    - matplotlib 
+    - scipy
+    - tkinter
+    - pandas
+    - gmsh
+
+### Installation
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+### Usage
+
+```bash
+python main.py
+```
+
+### Examples
+
+Check out the Examples folder for the validated cases and usage description.
+
+### Cite As
+
+```bash
+Prisha Desai, Anwak Manoj Kumar, and Manikandan Murugaiah "FALCON: Framework for Airfoil CFD and anaLysis OptimizatioN", https://github.com/Prisha22/FALCON
+```
+
+### References
+1. Drela, M. (1989). XFOIL: An Analysis and Design System for Low Reynolds Number Airfoils. In: Mueller, T.J. (eds) Low Reynolds Number Aerodynamics. Lecture Notes in Engineering, vol 54. Springer, Berlin, Heidelberg. https://doi.org/10.1007/978-3-642-84010-4_1
+
+2. SU2: An Open-Source Suite for Multiphysics Simulation and Design Thomas D. Economon, Francisco Palacios, Sean R. Copeland, Trent W. Lukaczyk, and Juan J. Alonso, AIAA Journal 2016 54:3, 828-846. https://doi.org/10.2514/1.J053813
+
+2. Kulfan, B.M. Universal parametric geometry representation method. J. Aircr. 2008, 45, 142–158. https://doi.org/10.2514/1.29958
+
+3. Sobieczky, H., “Parametric Airfoils and Wings,” Recent Development of Aerodynamic Design Methodologies, Springer, New York, 1999, pp. 71–87. https://doi.org/10.1007/978-3-322-89952-1_4
+
+4. Geuzaine, Christophe & Remacle, Jean-François. (2009). Gmsh: A 3-D Finite Element Mesh Generator with Built-in Pre- and Post-Processing Facilities. International Journal for Numerical Methods in Engineering. 79. 1309 - 1331. https://doi.org/10.1002/nme.2579 
