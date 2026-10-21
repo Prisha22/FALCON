@@ -13,3 +13,9 @@ output/
 # Editors
 .idea/
 .vscode/
+
+# Manuscript, reviews and revision notes (not part of the software)
+SOFTX-D-26-00865*.pdf
+SOFTX_revision_tracker.xlsx
+~$*.xlsx
+Restructured Files.zip

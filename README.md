@@ -1,14 +1,14 @@
 ## Framework for Airfoil CFD and Analysis Optimization (FALCON)
 <a name="top"></a>
 
-[![OS](https://img.shields.io/badge/OS-linux%2C%20windows%2C%20macOS-0078D4)]()
+[![OS](https://img.shields.io/badge/OS-windows%20%28tested%29-0078D4)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 :star: Star us on GitHub - it is what keeps us going!
 
 ### About
 
-FALCON is an open-source Python-based GUI framework designed to facilitate airfoil design, analysis, and optimization. It integrates airfoil parametrization techniques (CST and PARSEC), low-fidelity aerodynamic analysis using XFOIL, automated meshing with GMSH, and high-fidelity CFD simulations via SU2 (with automated post processing). The framework aims to streamline the airfoil design process by providing a user-friendly interface and automating various stages of analysis and optimization.
+FALCON is an open-source Python-based GUI framework designed to facilitate airfoil analysis; an optimization module is planned for v2.0. It integrates airfoil parametrization techniques (CST and PARSEC), low-fidelity aerodynamic analysis using XFOIL, automated meshing with GMSH, and high-fidelity CFD simulations via SU2 (with automated post processing). The framework aims to streamline the airfoil design process by providing a user-friendly interface and automating the stages of the analysis.
 
 ### Features
 
@@ -16,7 +16,7 @@ FALCON is an open-source Python-based GUI framework designed to facilitate airfo
 
 * Airfoil parametrization using CST and PARSEC techniques.
 
-* Embedded XFOIL for low-fidelity aerodynamic analysis.
+* XFOIL (installed separately and run as an external executable) for low-fidelity aerodynamic analysis.
 
 * Automated meshing using GMSH
 
@@ -38,10 +38,11 @@ FALCON is an open-source Python-based GUI framework designed to facilitate airfo
 
 * Python specific packages $\rightarrow$
 
-    - numpy (version < 2.0)
+    - numpy
     - matplotlib 
     - scipy
-    - tkinter
+    - PyQt6
+    - pyvista
     - pandas
     - gmsh
 

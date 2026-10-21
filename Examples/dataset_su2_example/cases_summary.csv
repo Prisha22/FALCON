@@ -1,5 +1,0 @@
-case_id,solver,airfoil,re,mach,n_alpha,repanel,n_points,mesh,y_plus,n_converged,state,wall_s,cores,fit_method,rmse_parsec,rmse_cst,mesh_cells,error
-su2_e207_Re1e+06_M0.25_a-2_8_2,su2,e207.dat,1000000,0.25,6,TRUE,500,structured,1,6,converged,22859.3,8,PARSEC,0.000309627,0.000331438,549327,
-su2_e207_Re1e+07_M0.25_a-2_8_2,su2,e207.dat,10000000,0.25,6,TRUE,500,structured,1,6,converged,24324.4,8,PARSEC,0.000309627,0.000331438,662803,
-su2_naca4412_Re1e+06_M0.25_a-2_8_2,su2,naca4412.dat,1000000,0.25,6,TRUE,500,structured,1,6,converged,37256.9,8,CST,0.001655251,0.000220782,549327,
-su2_naca4412_Re1e+07_M0.25_a-2_8_2,su2,naca4412.dat,10000000,0.25,6,TRUE,500,structured,1,6,converged,30433.7,8,CST,0.001655251,0.000220782,662803,

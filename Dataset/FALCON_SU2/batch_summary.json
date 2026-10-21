@@ -1,0 +1,21 @@
+{
+ "generated": "2026-10-21T19:26:40",
+ "falcon_commit": "ac5b7a5, db298e3, e903ac8 (per case in status.json)",
+ "su2": {
+  "cases": 9,
+  "cases_run": 9,
+  "cases_by_state": {
+   "converged": 6,
+   "partial": 3
+  },
+  "angles_requested": 79,
+  "angles_converged": 71,
+  "angle_convergence_rate": 0.8987341772151899,
+  "wall_hours": 59.36636111111112,
+  "core_hours": 914.2402222222222,
+  "cases_per_core_hour": 0.009844239819293787,
+  "converged_angles_per_core_hour": 0.07766011412998432,
+  "points_recorded": 79
+ },
+ "excel": "Dataset/FALCON_SU2/dataset.xlsx"
+}

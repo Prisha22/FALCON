@@ -3,5 +3,8 @@ e207.dat,su2,1.00E+06,0.25,-2,8,2,500,1,structured,yes
 e207.dat,su2,1.00E+07,0.25,-2,8,2,500,1,structured,yes
 naca4412.dat,su2,1.00E+06,0.25,-2,8,2,500,1,structured,yes
 naca4412.dat,su2,1.00E+07,0.25,-2,8,2,500,1,structured,yes
-,,,,,,,,,,
-,,,,,,,,,,
+daytonwright6.dat,su2,50000,0.15,-10,10,2,200,1,structured,yes
+fx38153.dat,su2,50000,0.15,-10,10,2,200,1,structured,yes
+naca4412.dat,su2,50000,0.15,-10,10,2,200,1,structured,yes
+s1223.dat,su2,50000,0.15,-10,10,2,200,1,structured,yes
+whitcomb.dat,su2,50000,0.15,-10,10,2,200,1,structured,yes
