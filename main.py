@@ -1210,10 +1210,14 @@ class FalconApp(QMainWindow):
         fx.addRow("Max Alpha:", self.batch_xf_amax_entry)
         fx.addRow("Step:", self.batch_xf_astep_entry)
         self.batch_workers_entry = QLineEdit(str(max(1, (os.cpu_count() or 2) // 2)))
+        self.batch_xfoil_iter_entry = QLineEdit("100")
+        self.batch_xfoil_iter_entry.setToolTip("XFOIL ITER: viscous iterations allowed per angle")
         self.batch_xfoil_timeout_entry = QLineEdit("60")
-        self.batch_xfoil_timeout_entry.setToolTip("Some airfoils hang XFOIL; such a case is stopped after this long")
+        self.batch_xfoil_timeout_entry.setToolTip(
+            "Some angles hang XFOIL; such an angle is abandoned after this long and the sweep carries on")
         fx.addRow("Parallel Cases:", self.batch_workers_entry)
-        fx.addRow("Time Limit per Case (s):", self.batch_xfoil_timeout_entry)
+        fx.addRow("Max Iterations (ITER):", self.batch_xfoil_iter_entry)
+        fx.addRow("Time Limit per Angle (s):", self.batch_xfoil_timeout_entry)
         fx.addRow(QLabel("Re and Mach take several values, separated by commas."))
         lx.addWidget(g_xf, 0, 0, Qt.AlignmentFlag.AlignTop)
         lx.setColumnStretch(1, 1)
@@ -1481,6 +1485,9 @@ class FalconApp(QMainWindow):
                 raise ValueError("Choose an output folder")
             workers = int(self._parse_one(self.batch_workers_entry.text(), "Parallel cases"))
             xfoil_timeout = self._parse_one(self.batch_xfoil_timeout_entry.text(), "XFOIL time limit")
+            xfoil_iter = int(self._parse_one(self.batch_xfoil_iter_entry.text(), "XFOIL iterations"))
+            if xfoil_timeout <= 0 or xfoil_iter < 1:
+                raise ValueError("XFOIL time limit and iterations must be positive")
             su2_hours = self._parse_one(self.batch_su2_timeout_entry.text(), "SU2 time limit")
             cores = int(self._parse_one(self.batch_cores_entry.text(), "Cores")) if self.batch_mpi_check.isChecked() else 1
             su2_settings = None
@@ -1508,7 +1515,8 @@ class FalconApp(QMainWindow):
                             f"{c.alpha_max:g}", f"{c.alpha_step:g}", c.n_points, f"{c.y_plus:g}", c.mesh,
                             "yes" if c.repanel else "no"])
         with open(os.path.join(out_dir, "batch_settings.json"), "w") as f:
-            json.dump({"airfoil_folder": folder, "su2_settings": su2_settings, "cores": cores}, f, indent=1)
+            json.dump({"airfoil_folder": folder, "su2_settings": su2_settings, "cores": cores,
+                       "xfoil_iter": xfoil_iter, "xfoil_angle_timeout_s": xfoil_timeout}, f, indent=1)
 
         self._batch_out_dir = out_dir
         self._batch_total = len(cases)
@@ -1522,6 +1530,7 @@ class FalconApp(QMainWindow):
 
         kwargs = dict(out_dir=out_dir, airfoil_dir=folder, xfoil_path=xfoil_path, cores=cores, workers=workers,
                       xfoil_timeout=float(xfoil_timeout), su2_timeout=float(su2_hours) * 3600.0,
+                      xfoil_iter=xfoil_iter, xfoil_angle_timeout=float(xfoil_timeout),
                       rerun_failed=self.batch_rerun_check.isChecked(),
                       dry_run=self.batch_dry_check.isChecked() and cases[0].solver == "su2",
                       su2_settings=su2_settings)
