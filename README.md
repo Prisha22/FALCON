@@ -10,6 +10,14 @@
 
 FALCON is an open-source Python-based GUI framework designed to facilitate airfoil analysis; an optimization module is planned for v2.0. It integrates airfoil parametrization techniques (CST and PARSEC), low-fidelity aerodynamic analysis using XFOIL, automated meshing with GMSH, and high-fidelity CFD simulations via SU2 (with automated post processing). The framework aims to streamline the airfoil design process by providing a user-friendly interface and automating the stages of the analysis.
 
+Geometry import and CST/PARSEC parameterization:
+
+![Parameterization tab](docs/images/parameterization_tab.png)
+
+Automatically selected SU2 solver settings (editable before the run):
+
+![SU2 solver settings](docs/images/su2_solver_settings.png)
+
 ### Features
 
 * User-friendly and easily accesible GUI.
@@ -51,6 +59,22 @@ FALCON is an open-source Python-based GUI framework designed to facilitate airfo
 ```bash
 python -m pip install -r requirements.txt
 ```
+
+### Automatic solver settings
+
+"Load Recommended Settings" picks an SU2 configuration from the Mach and Reynolds numbers only
+(the angle of attack is not used). Every setting can be changed before the run.
+
+| Condition | Configuration | Model | Scheme | Time | CFL | Convergence |
+|---|---|---|---|---|---|---|
+| M ≥ 1 | Supersonic: compressible RANS | SST | Roe + MUSCL, Venkatakrishnan limiter; multigrid off | steady | adaptive, from 0.5 | RMS density 1e-6, 3000 iterations |
+| 0.7 ≤ M < 1 | Transonic: compressible RANS | SA | JST (0.5, 0.005) | unsteady, dual time stepping | adaptive, from 1 | windowed Cauchy on CL, CD (1e-4), 5000 time steps |
+| M < 0.7, Re ≥ 1e5 | Incompressible RANS | SST, with LM transition for Re ≤ 1e6 | JST | steady | 10 | RMS pressure 1e-8, 5000 iterations |
+| M < 0.7, Re < 1e5 | Low Re: compressible RANS with low-Mach treatment | SST + LM (Tu 0.1 %, μt/μ 3) | LMROE + MUSCL, Venkatakrishnan limiter | unsteady, dual time stepping | adaptive, from 5 | windowed Cauchy on CL, CD (1e-5), 10000 time steps |
+
+All configurations use weighted least-squares gradients, implicit time integration and FGMRES with ILU
+preconditioning. The incompressible configuration neglects compressibility and is appropriate only for
+M ≲ 0.3. The templates are in `Configuration_Files/`.
 
 ### Usage
 
