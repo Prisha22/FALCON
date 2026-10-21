@@ -772,12 +772,13 @@ class FalconApp(QMainWindow):
         elif 0.7 <= mach < 1.0:
             selected_file = "Transonic.cfg"
             new_regime = "Compressible"
-        else:
+        elif reynolds >= 1e5:
+            selected_file = "HighReIncomp.cfg"
             new_regime = "Incompressible"
-            if reynolds >= 1e6:
-                selected_file = "HighReIncomp.cfg"
-            else:
-                selected_file = "LowReIncomp.cfg"
+        else:
+            # Physically incompressible, but the low-Re template runs SU2's compressible solver (unsteady, LMROE).
+            selected_file = "LowReIncomp.cfg"
+            new_regime = "Compressible"
 
         cfg_path = os.path.join(self.script_dir, "Configuration_Files", selected_file)
         print(f"Loading recommended settings from: {cfg_path}")
