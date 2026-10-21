@@ -14,7 +14,7 @@ Geometry import and CST/PARSEC parameterization:
 
 ![Parameterization tab](docs/images/parameterization_tab.png)
 
-Automatically selected SU2 solver settings (editable before the run):
+SU2 solver setup (all settings are editable before the run):
 
 ![SU2 solver settings](docs/images/su2_solver_settings.png)
 
