@@ -1,0 +1,22 @@
+{
+ "generated": "2026-10-21T18:22:56",
+ "falcon_commit": "93f8d80",
+ "su2": {
+  "cases": 6,
+  "cases_run": 6,
+  "cases_by_state": {
+   "converged": 6,
+   "failed": 0,
+   "crashed": 0
+  },
+  "angles_requested": 24,
+  "angles_converged": 24,
+  "angle_convergence_rate": 0.6666666666666666,
+  "wall_hours": 35.07222222222222,
+  "core_hours": 280.5777777777778,
+  "cases_per_core_hour": 0.021384444796451765,
+  "converged_angles_per_core_hour": 0.08553777918580706,
+  "points_recorded": 24
+ },
+ "excel": "not written: install openpyxl (pip install openpyxl) for dataset.xlsx"
+}

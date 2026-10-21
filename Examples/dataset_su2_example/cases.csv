@@ -1,0 +1,7 @@
+airfoil,solver,re,mach,alpha_min,alpha_max,alpha_step,n_points,y_plus,mesh,repanel
+e207.dat,su2,1.00E+06,0.25,-2,8,2,500,1,structured,yes
+e207.dat,su2,1.00E+07,0.25,-2,8,2,500,1,structured,yes
+naca4412.dat,su2,1.00E+06,0.25,-2,8,2,500,1,structured,yes
+naca4412.dat,su2,1.00E+07,0.25,-2,8,2,500,1,structured,yes
+,,,,,,,,,,
+,,,,,,,,,,
