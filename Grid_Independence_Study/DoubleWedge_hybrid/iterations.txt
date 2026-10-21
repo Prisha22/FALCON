@@ -1,0 +1,16 @@
+rans_a02 L0: 125,435 cells, 3000 iterations
+rans_a02 L1: 261,129 cells, 3000 iterations
+rans_a02 L2: 504,089 cells, 3000 iterations
+rans_a02 L3: 1,013,510 cells, 10000 iterations
+rans_a08 L0: 125,435 cells, 3000 iterations
+rans_a08 L1: 261,129 cells, 3000 iterations
+rans_a08 L2: 504,089 cells, 5000 iterations
+rans_a08 L3: 1,013,510 cells, 6000 iterations
+rans_a14 L0: 125,435 cells, 3000 iterations
+rans_a14 L1: 261,129 cells, 7000 iterations
+rans_a14 L2: 504,089 cells, 7000 iterations
+rans_a14 L3: 1,013,510 cells, 10000 iterations
+euler_a06 L0: 125,435 cells, 3000 iterations
+euler_a06 L1: 261,129 cells, 3000 iterations
+euler_a06 L2: 504,089 cells, 3000 iterations
+euler_a06 L3: 1,013,510 cells, 4000 iterations

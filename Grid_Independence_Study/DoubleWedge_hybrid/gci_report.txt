@@ -1,0 +1,37 @@
+Grid convergence, hybrid mesh family, double wedge M 1.86 Re 0.66e6
+cells: L0 125,435, L1 261,129, L2 504,089, L3 1,013,510
+
+== RANS 2 deg  (levels available: L0, L1, L2, L3)
+   CL_p  L0 0.09030 L1 0.09063 L2 0.09048 L3 0.09073 | L3-L1: p 1.28 ext 0.09116 GCI_fine 0.60% (oscillatory) | L2-L0: p 2.20 ext 0.09033 GCI_fine 0.20% (oscillatory)
+   CD_p  L0 0.02905 L1 0.02915 L2 0.02919 L3 0.02925 | L3-L1: p 1.21 ext 0.02938 GCI_fine 0.52% (divergent) | L2-L0: p 2.24 ext 0.02922 GCI_fine 0.15% (monotone)
+   CD_f  L0 0.00702 L1 0.00671 L2 0.00656 L3 0.00700 | L3-L1: p 2.94 ext 0.00726 GCI_fine 4.47% (oscillatory) | L2-L0: p 1.69 ext 0.00635 GCI_fine 3.95% (monotone)
+   CD    L0 0.03607 L1 0.03586 L2 0.03574 L3 0.03626 | L3-L1: p 4.10 ext 0.03642 GCI_fine 0.56% (oscillatory) | L2-L0: p 1.47 ext 0.03556 GCI_fine 0.64% (monotone)
+   convergence (last 300 its band): L0:3000it/dCL 1e-04 L1:3000it/dCL 1e-04 L2:3000it/dCL 1e-04 L3:10000it/dCL 1e-05
+
+== RANS 8 deg  (levels available: L0, L1, L2, L3)
+   CL_p  L0 0.36685 L1 0.36850 L2 0.36814 L3 0.36791 | L3-L1: p 1.58 ext 0.36760 GCI_fine 0.10% (monotone) | L2-L0: p 4.18 ext 0.36801 GCI_fine 0.04% (oscillatory)
+   CD_p  L0 0.07911 L1 0.07941 L2 0.07935 L3 0.07930 | L3-L1: p 0.68 ext 0.07912 GCI_fine 0.28% (monotone) | L2-L0: p 4.60 ext 0.07933 GCI_fine 0.03% (oscillatory)
+   CD_f  L0 0.00667 L1 0.00629 L2 0.00627 L3 0.00616 | L3-L1: p 5.09 ext 0.00614 GCI_fine 0.46% (divergent) | L2-L0: p 8.50 ext 0.00627 GCI_fine 0.02% (monotone)
+   CD    L0 0.08578 L1 0.08570 L2 0.08562 L3 0.08546 | L3-L1: p 1.97 ext 0.08530 GCI_fine 0.23% (divergent) | L2-L0: p 0.08 ext 0.08271 GCI_fine 4.25% (monotone)
+   convergence (last 300 its band): L0:3000it/dCL 3e-04 L1:3000it/dCL 2e-04 L2:5000it/dCL 1e-04 L3:6000it/dCL 8e-05
+
+== RANS 14 deg  (levels available: L0, L1, L2, L3)
+   CL_p  L0 0.68269 L1 0.67791 L2 0.67613 L3 0.67422 | L3-L1: p 0.01 ext 0.31126 GCI_fine 67.29% (divergent) | L2-L0: p 2.50 ext 0.67473 GCI_fine 0.26% (monotone)
+   CD_p  L0 0.20599 L1 0.20419 L2 0.20355 L3 0.20299 | L3-L1: p 0.64 ext 0.20077 GCI_fine 1.37% (monotone) | L2-L0: p 2.61 ext 0.20307 GCI_fine 0.29% (monotone)
+   CD_f  L0 0.00596 L1 0.00571 L2 0.00595 L3 0.00647 | L3-L1: p 2.08 ext 0.00696 GCI_fine 9.49% (divergent) | L2-L0: p 0.13 ext 0.01137 GCI_fine 113.98% (oscillatory)
+   CD    L0 0.21195 L1 0.20991 L2 0.20949 L3 0.20946 | L3-L1: p 8.15 ext 0.20946 GCI_fine 0.00% (monotone) | L2-L0: p 4.23 ext 0.20935 GCI_fine 0.08% (monotone)
+   convergence (last 300 its band): L0:3000it/dCL 7e-04 L1:7000it/dCL 3e-04 L2:7000it/dCL 5e-04 L3:10000it/dCL 6e-04
+
+== EULER 6 deg  (levels available: L0, L1, L2, L3)
+   CL    L0 0.27125 L1 0.27215 L2 0.27274 L3 0.27321 | L3-L1: p 0.82 ext 0.27462 GCI_fine 0.65% (monotone) | L2-L0: p 0.95 ext 0.27432 GCI_fine 0.72% (monotone)
+   CD    L0 0.05473 L1 0.05494 L2 0.05512 L3 0.05526 | L3-L1: p 0.90 ext 0.05565 GCI_fine 0.88% (monotone) | L2-L0: p 0.06 ext 0.06378 GCI_fine 19.63% (monotone)
+   CL error vs exact (0.27435): L0 -0.00310 (-1.13%), L1 -0.00220 (-0.80%), L2 -0.00162 (-0.59%), L3 -0.00115 (-0.42%)
+      observed order from exact error L0->L1: 0.94
+      observed order from exact error L1->L2: 0.94
+      observed order from exact error L2->L3: 0.98
+   CD error vs exact (0.05536): L0 -0.00063 (-1.14%), L1 -0.00043 (-0.77%), L2 -0.00024 (-0.44%), L3 -0.00010 (-0.18%)
+      observed order from exact error L0->L1: 1.05
+      observed order from exact error L1->L2: 1.72
+      observed order from exact error L2->L3: 2.57
+   convergence (last 300 its band): L0:3000it/dCL 2e-04 L1:3000it/dCL 1e-05 L2:3000it/dCL 1e-05 L3:4000it/dCL 2e-05
+
