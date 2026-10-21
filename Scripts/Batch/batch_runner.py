@@ -1,12 +1,3 @@
-"""
-Headless batch execution of the FALCON workflow over a list of cases.
-
-A case is one airfoil at one Reynolds and Mach number, swept over a range of angles of attack with either XFOIL or
-SU2. Every case runs in its own process and folder, under a time limit, with its own log and status file, so a
-failed or hung case does not stop the batch, and re-running the same command skips the cases that already finished.
-The steps are the ones the GUI performs: CST and PARSEC fits with the lower-RMSE choice, spline re-paneling, the
-structured C-mesh, the solver settings the GUI loads for the case's Mach and Reynolds numbers, then XFOIL or SU2.
-"""
 import csv
 import hashlib
 import json
@@ -303,39 +294,146 @@ def prepare_geometry(case, airfoil_dir, case_dir):
                                 "n_coordinates": int(len(x))}
 
 
-def run_xfoil_case(case, case_dir, airfoil_dir, xfoil_path, timeout):
+def _read_polar(path):
+    rows = []
+    if os.path.exists(path):
+        for line in open(path, errors="replace"):
+            try:
+                nums = [float(v) for v in line.split()]
+            except ValueError:
+                continue
+            if len(nums) >= 5:
+                rows.append(nums)
+    return rows
+
+
+def run_xfoil_sweep(xfoil_path, work_dir, airfoil_file, reynolds, mach, alphas, n_iter=100, angle_timeout=300.0,
+                    setup_timeout=60.0):
+    """
+    FALCON's XFOIL session (PLOP G, LOAD, PANE, OPER, Visc, Mach, ITER, PACC, then ALFA + CPWR per angle, fed from a
+    command file as xfoil1.run_xfoil_logic does) with a time limit per angle. XFOIL reads a piped stdin in blocks and
+    buffers its screen output, so progress is followed on disk: a SAVE of the paneled airfoil marks the end of the
+    geometry setup, and each angle's CPWR file, written whether or not the angle converged, marks the end of that
+    angle. An angle that has not finished within angle_timeout seconds is abandoned: XFOIL is killed and a fresh
+    session continues from the next angle. A geometry setup that does not finish within setup_timeout abandons the
+    case. Returns (polar rows, timed-out angles, error or None).
+    """
+    rows, timed_out, error = [], [], None
+    remaining = list(alphas)
+    session = 0
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    while remaining:
+        session += 1
+        polar, setup = f"polar_{session}.txt", f"setup_{session}.dat"
+        markers = [f"cp_s{session}_{i}.dat" for i in range(len(remaining))]
+        for f in [polar, setup] + markers:
+            if os.path.exists(os.path.join(work_dir, f)):
+                os.remove(os.path.join(work_dir, f))
+        commands = ["PLOP", "G", "", f"LOAD {os.path.basename(airfoil_file)}", "PANE", f"SAVE {setup}", "OPER",
+                    f"Visc {reynolds}", f"Mach {mach}", f"ITER {int(n_iter)}", "PACC", polar, ""]
+        for alpha, marker in zip(remaining, markers):
+            commands += [f"ALFA {alpha:.2f}", f"CPWR {marker}"]
+        commands += ["PACC", "", "QUIT"]
+        input_path = os.path.join(work_dir, f"xfoil_input_{session}.txt")
+        with open(input_path, "w") as f:
+            f.write("\n".join(commands) + "\n")
+
+        def wait_for(name, limit):
+            deadline = time.time() + limit
+            while time.time() < deadline:
+                if os.path.exists(os.path.join(work_dir, name)):
+                    return True
+                if proc.poll() is not None:
+                    return os.path.exists(os.path.join(work_dir, name))
+                time.sleep(0.05)
+            return False
+
+        with open(input_path) as input_f:
+            proc = subprocess.Popen([xfoil_path], stdin=input_f, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, cwd=work_dir, creationflags=flags)
+            try:
+                if not wait_for(setup, setup_timeout):
+                    error = ("XFOIL exited during geometry load/paneling" if proc.poll() is not None
+                             else f"XFOIL geometry load/paneling did not finish within {setup_timeout:g} s")
+                    timed_out += remaining if proc.poll() is None else []
+                    remaining = []
+                else:
+                    batch = list(remaining)
+                    for alpha, marker in zip(batch, markers):
+                        done = wait_for(marker, angle_timeout)
+                        remaining.remove(alpha)
+                        if done:
+                            continue
+                        if proc.poll() is None:
+                            timed_out.append(alpha)  # hung: kill and carry on from the next angle
+                        else:
+                            error = f"XFOIL exited at alpha {alpha:g} (exit code {proc.returncode})"
+                        break
+                    if not remaining:
+                        try:
+                            proc.wait(30)
+                        except subprocess.TimeoutExpired:
+                            pass
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(10)
+        rows += _read_polar(os.path.join(work_dir, polar))
+        for f in [setup] + markers:
+            if os.path.exists(os.path.join(work_dir, f)):
+                os.remove(os.path.join(work_dir, f))
+    return rows, timed_out, error
+
+
+def run_xfoil_case(case, case_dir, airfoil_dir, xfoil_path, timeout, n_iter=100, angle_timeout=None):
+    """Geometry as the GUI prepares it, then the XFOIL sweep. With angle_timeout, angles run one at a time and an
+    angle that hangs is abandoned (run_xfoil_sweep); otherwise FALCON's single-run path with one time limit."""
     from Scripts.Solver_and_Results import xfoil1
 
     _, _, _, _, geometry = prepare_geometry(case, airfoil_dir, case_dir)
-
     fired = threading.Event()
+    timed_out, error = [], None
 
-    def stop():
-        fired.set()
-        xfoil1.stop_xfoil()
+    if angle_timeout:
+        run_file = os.path.join(case_dir, "run_airfoil.dat")
+        if not xfoil1.clean_airfoil_geometry(os.path.join(case_dir, "output.dat"), run_file):
+            shutil.copy(os.path.join(case_dir, "output.dat"), run_file)
+        polar, timed_out, error = run_xfoil_sweep(xfoil_path, case_dir, run_file, case.reynolds, case.mach,
+                                                  case.alphas(), n_iter, angle_timeout)
+    else:
+        def stop():
+            fired.set()
+            xfoil1.stop_xfoil()
 
-    watchdog = threading.Timer(timeout, stop)
-    watchdog.start()
-    try:
-        polar, _ = xfoil1.run_xfoil_logic(xfoil_path, case_dir, os.path.join(case_dir, "output.dat"),
-                                          case.reynolds, case.alpha_max, case.alpha_min, case.alpha_step,
-                                          case.mach)
-    finally:
-        watchdog.cancel()
+        watchdog = threading.Timer(timeout, stop)
+        watchdog.start()
+        try:
+            polar, _ = xfoil1.run_xfoil_logic(xfoil_path, case_dir, os.path.join(case_dir, "output.dat"),
+                                              case.reynolds, case.alpha_max, case.alpha_min, case.alpha_step,
+                                              case.mach)
+        finally:
+            watchdog.cancel()
 
     # XFOIL writes only converged points to its polar, so an angle missing from it did not converge.
     points = []
     for alpha in case.alphas():
         row = next((r for r in polar if len(r) >= 5 and abs(r[0] - alpha) < 1e-3), None)
+        hung = any(abs(a - alpha) < 1e-6 for a in timed_out)
         # XFOIL 6.99 polar columns: alpha, CL, CD, CDp, CM, Top_Xtr, Bot_Xtr
         points.append({
-            "alpha": alpha, "converged": row is not None, "state": "converged" if row else "not_converged",
+            "alpha": alpha, "converged": row is not None,
+            "state": "converged" if row else ("timeout" if hung else "not_converged"),
             "cl": row[1] if row else None, "cd": row[2] if row else None, "cdp": row[3] if row else None,
             "cm": row[4] if row else None,
             "xtr_top": row[5] if row and len(row) > 5 else None,
             "xtr_bottom": row[6] if row and len(row) > 6 else None,
         })
-    return {"geometry": geometry, "points": points, "timed_out": fired.is_set()}
+    result = {"geometry": geometry, "points": points, "timed_out": fired.is_set(),
+              "xfoil": {"iter": n_iter, "angle_timeout_s": angle_timeout,
+                        "angles_timed_out": [float(a) for a in timed_out]}}
+    if error:
+        result["xfoil"]["error"] = error
+    return result
 
 
 def _count_cells(mesh_path):
@@ -524,7 +622,7 @@ def _mark(out_dir, case, state, message):
 
 
 def _case_process(case_fields, out_dir, airfoil_dir, xfoil_path, cores, timeout, dry_run=False, su2_config=None,
-                  max_iter=None, su2_settings=None):
+                  max_iter=None, su2_settings=None, xfoil_iter=100, xfoil_angle_timeout=None):
     """Entry point of the child process that runs one case."""
     case = Case(**case_fields)
     case_dir = os.path.join(out_dir, case.case_id)
@@ -541,7 +639,7 @@ def _case_process(case_fields, out_dir, airfoil_dir, xfoil_path, cores, timeout,
     start = time.time()
     try:
         if case.solver == "xfoil":
-            result = run_xfoil_case(case, case_dir, airfoil_dir, xfoil_path, timeout)
+            result = run_xfoil_case(case, case_dir, airfoil_dir, xfoil_path, timeout, xfoil_iter, xfoil_angle_timeout)
         else:
             result = run_su2_case(case, case_dir, airfoil_dir, cores, timeout, dry_run, su2_config, max_iter,
                                   su2_settings)
@@ -623,7 +721,7 @@ def _run_pool(cases, workers, child_args, time_limit, out_dir, log, should_stop=
 
 def run_batch(cases, out_dir, airfoil_dir, xfoil_path=None, cores=8, workers=4, xfoil_timeout=180.0,
               su2_timeout=4 * 3600.0, rerun_failed=False, dry_run=False, su2_config=None, max_iter=None, log=print,
-              should_stop=None, su2_settings=None):
+              should_stop=None, su2_settings=None, xfoil_iter=100, xfoil_angle_timeout=None):
     """
     Run every case that has not finished yet and write the summaries.
 
@@ -634,7 +732,9 @@ def run_batch(cases, out_dir, airfoil_dir, xfoil_path=None, cores=8, workers=4, 
     configuration file (max_iter caps its ITER); otherwise su2_settings ({"regime", "settings"}, as the GUI's Solver
     Setup tab gives them) replace them when given. should_stop, if given, is polled while cases run (the GUI's Stop
     button); cases it interrupts are marked 'stopped' and run again on the next call. Returns the statistics
-    written to batch_summary.json.
+    written to batch_summary.json. xfoil_iter is XFOIL's ITER (FALCON's single runs use 100); with
+    xfoil_angle_timeout (seconds) XFOIL runs one angle at a time and abandons any angle that takes longer, and
+    xfoil_timeout then only caps a whole case.
     """
     out_dir = os.path.abspath(out_dir)
     airfoil_dir = os.path.abspath(airfoil_dir)
@@ -667,8 +767,10 @@ def run_batch(cases, out_dir, airfoil_dir, xfoil_path=None, cores=8, workers=4, 
             raise FileNotFoundError(f"XFOIL executable not found: {xfoil_path!r}")
         xfoil_path = os.path.abspath(resolved)
         _run_pool(xfoil_cases, workers,
-                  lambda c: (asdict(c), out_dir, airfoil_dir, xfoil_path, 1, xfoil_timeout),
-                  lambda c: xfoil_timeout + 300.0, out_dir, log, should_stop)
+                  lambda c: (asdict(c), out_dir, airfoil_dir, xfoil_path, 1, xfoil_timeout, False, None, None, None,
+                             xfoil_iter, xfoil_angle_timeout),
+                  lambda c: (len(c.alphas()) * (xfoil_angle_timeout + 120.0) + 300.0 if xfoil_angle_timeout
+                             else xfoil_timeout + 300.0), out_dir, log, should_stop)
     if su2_cases and not (should_stop is not None and should_stop()):
         _run_pool(su2_cases, 1,
                   lambda c: (asdict(c), out_dir, airfoil_dir, xfoil_path, cores, su2_timeout, dry_run,
