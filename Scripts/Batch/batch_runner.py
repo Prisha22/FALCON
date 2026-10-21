@@ -201,9 +201,10 @@ def gui_recommended_settings(mach, reynolds):
         template, regime = "supersonic.cfg", "Compressible"
     elif 0.7 <= mach < 1.0:
         template, regime = "Transonic.cfg", "Compressible"
+    elif reynolds >= 1e5:
+        template, regime = "HighReIncomp.cfg", "Incompressible"
     else:
-        regime = "Incompressible"
-        template = "HighReIncomp.cfg" if reynolds >= 1e6 else "LowReIncomp.cfg"
+        template, regime = "LowReIncomp.cfg", "Compressible"  # compressible solver for the low-Re template
 
     options = SU2_INCOMPRESSIBLE_SETTINGS if regime == "Incompressible" else SU2_COMPRESSIBLE_SETTINGS
     conv_fields = ["RMS_PRESSURE"] if regime == "Incompressible" else ["RMS_DENSITY", "REL_RMS_DENSITY", "RMS_ENERGY"]

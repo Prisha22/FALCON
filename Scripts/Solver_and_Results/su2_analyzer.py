@@ -688,6 +688,16 @@ def prepare_su2_config(
             "",
             "% ---------------------------- TIME CONVERGENCE -------------------------------%",
             f"TIME_ITER= {iter_val}",
+            "",
+            # Windowed Cauchy on the time-averaged forces, as in LowReIncomp.cfg (its CONV_CAUCHY_EPS/_STEPS).
+            "WINDOW_CAUCHY_CRIT= YES",
+            f"WINDOW_START_ITER= {gui_settings.get('WINDOW_START_ITER', 500)}",
+            f"WINDOW_FUNCTION= {gui_settings.get('WINDOW_FUNCTION', 'HANN_SQUARE')}",
+            "",
+            f"CONV_WINDOW_FIELD= {gui_settings.get('CONV_WINDOW_FIELD', '( TAVG_DRAG, TAVG_LIFT )')}",
+            "CONV_WINDOW_STARTITER= 0",
+            f"CONV_WINDOW_CAUCHY_EPS= {gui_settings.get('CONV_WINDOW_CAUCHY_EPS', gui_settings.get('CONV_CAUCHY_EPS', 1e-5))}",
+            f"CONV_WINDOW_CAUCHY_ELEMS= {gui_settings.get('CONV_WINDOW_CAUCHY_ELEMS', gui_settings.get('CONV_CAUCHY_STEPS', 10))}",
             ""
         ])
     else:
