@@ -39,6 +39,12 @@ from Scripts.Solver_and_Results.live_plotter import LivePlotterWindow
 from Scripts.Batch.batch_runner import Case, load_cases, run_batch
 
 
+# Colours the Qt palette does not reach (log panel, plots). __main__ switches to the light set on a light-mode system.
+COLORS = {'fig': '#1e1e1e', 'axes': '#2b2b2b', 'text': '#f8f8f2', 'legend': '#3a3a3a', 'grid': '#555555',
+          'actual': '#00d4ff', 'polar': '#62b6ef', 'yplus': '#999999', 'yplus_warn': '#ff8f5a'}
+LIGHT_COLORS = {'fig': '#ffffff', 'axes': '#ffffff', 'text': '#000000', 'legend': '#ffffff', 'grid': '#c8c8c8',
+                'actual': '#0072b2', 'polar': '#0072b2', 'yplus': '#555555', 'yplus_warn': '#c0392b'}
+
 XFOIL_MAX_POINTS_PER_SURFACE = 500
 BATCH_CSV_COLUMNS = ["airfoil", "solver", "re", "mach", "alpha_min", "alpha_max", "alpha_step", "n_points", "y_plus",
                      "mesh", "repanel"]
@@ -125,7 +131,7 @@ class FalconApp(QMainWindow):
         log_layout = QVBoxLayout(log_group)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setStyleSheet("background-color: #2B2B2B; color: #F8F8F2; font-family: Consolas;")
+        self.log_text.setStyleSheet(f"background-color: {COLORS['axes']}; color: {COLORS['text']}; font-family: Consolas;")
         log_layout.addWidget(self.log_text)
         self.main_splitter.addWidget(log_group)
         self.main_splitter.setSizes([700, 200])
@@ -150,7 +156,7 @@ class FalconApp(QMainWindow):
         self.batch_finished_signal.connect(self.on_batch_finished)
 
     def append_log(self, text, tag):
-        color = "#F8F8F2" if tag == "stdout" else "#FF5555"
+        color = COLORS['text'] if tag == "stdout" else "#FF5555"
         self.log_text.moveCursor(self.log_text.textCursor().MoveOperation.End)
         self.log_text.insertHtml(f'<span style="color:{color};">{text}</span>'.replace("\n", "<br>"))
         self.log_text.ensureCursorVisible()
@@ -210,9 +216,9 @@ class FalconApp(QMainWindow):
 
         plot_group = QGroupBox("Airfoil Plot")
         plot_layout = QVBoxLayout(plot_group)
-        self.tab1_figure = Figure(figsize=(5, 4), facecolor='#1e1e1e')
+        self.tab1_figure = Figure(figsize=(5, 4), facecolor=COLORS['fig'])
         self.tab1_canvas = FigureCanvasQTAgg(self.tab1_figure)
-        self.tab1_canvas.setStyleSheet("background-color: #1e1e1e;")
+        self.tab1_canvas.setStyleSheet(f"background-color: {COLORS['fig']};")
         plot_layout.addWidget(self.tab1_canvas)
         right_layout.addWidget(plot_group)
 
@@ -278,31 +284,31 @@ class FalconApp(QMainWindow):
 
             self.tab1_figure.clear()
             ax1 = self.tab1_figure.add_subplot(211)
-            ax1.set_facecolor('#2b2b2b')
-            ax1.tick_params(colors='#f8f8f2')
-            ax1.xaxis.label.set_color('#f8f8f2')
-            ax1.yaxis.label.set_color('#f8f8f2')
-            ax1.title.set_color('#f8f8f2')
+            ax1.set_facecolor(COLORS['axes'])
+            ax1.tick_params(colors=COLORS['text'])
+            ax1.xaxis.label.set_color(COLORS['text'])
+            ax1.yaxis.label.set_color(COLORS['text'])
+            ax1.title.set_color(COLORS['text'])
             for spine in ax1.spines.values():
-                spine.set_edgecolor('#555555')
+                spine.set_edgecolor(COLORS['grid'])
             ax1.plot(self.xcoords, self.foil1, color='#ff6b6b', linewidth=1.5, label='PARSEC fit')
-            ax1.plot(self.xcoords, self.ycoords, color='#00d4ff', linewidth=1.0, linestyle='--', label='Actual', zorder=5)
-            ax1.legend(facecolor='#3a3a3a', labelcolor='#f8f8f2')
-            ax1.grid(True, color='#555555')
+            ax1.plot(self.xcoords, self.ycoords, color=COLORS['actual'], linewidth=1.0, linestyle='--', label='Actual', zorder=5)
+            ax1.legend(facecolor=COLORS['legend'], labelcolor=COLORS['text'])
+            ax1.grid(True, color=COLORS['grid'])
             ax1.set_title('PARSEC')
 
             ax2 = self.tab1_figure.add_subplot(212)
-            ax2.set_facecolor('#2b2b2b')
-            ax2.tick_params(colors='#f8f8f2')
-            ax2.xaxis.label.set_color('#f8f8f2')
-            ax2.yaxis.label.set_color('#f8f8f2')
-            ax2.title.set_color('#f8f8f2')
+            ax2.set_facecolor(COLORS['axes'])
+            ax2.tick_params(colors=COLORS['text'])
+            ax2.xaxis.label.set_color(COLORS['text'])
+            ax2.yaxis.label.set_color(COLORS['text'])
+            ax2.title.set_color(COLORS['text'])
             for spine in ax2.spines.values():
-                spine.set_edgecolor('#555555')
+                spine.set_edgecolor(COLORS['grid'])
             ax2.plot(self.xcoords, self.foil2, color='#ff6b6b', linewidth=1.5, label='CST fit')
-            ax2.plot(self.xcoords, self.ycoords, color='#00d4ff', linewidth=1.0, linestyle='--', label='Actual', zorder=5)
-            ax2.legend(facecolor='#3a3a3a', labelcolor='#f8f8f2')
-            ax2.grid(True, color='#555555')
+            ax2.plot(self.xcoords, self.ycoords, color=COLORS['actual'], linewidth=1.0, linestyle='--', label='Actual', zorder=5)
+            ax2.legend(facecolor=COLORS['legend'], labelcolor=COLORS['text'])
+            ax2.grid(True, color=COLORS['grid'])
             ax2.set_title('CST')
 
             self.tab1_figure.tight_layout()
@@ -387,9 +393,9 @@ class FalconApp(QMainWindow):
 
         plot_group = QGroupBox("Polar Plot")
         plot_layout = QVBoxLayout(plot_group)
-        self.xfoil_figure = Figure(figsize=(5, 4), facecolor='#1e1e1e')
+        self.xfoil_figure = Figure(figsize=(5, 4), facecolor=COLORS['fig'])
         self.xfoil_canvas = FigureCanvasQTAgg(self.xfoil_figure)
-        self.xfoil_canvas.setStyleSheet("background-color: #1e1e1e;")
+        self.xfoil_canvas.setStyleSheet(f"background-color: {COLORS['fig']};")
         plot_layout.addWidget(self.xfoil_canvas)
         layout.addWidget(plot_group, 0, 1)
         layout.setColumnStretch(1, 1)
@@ -423,13 +429,13 @@ class FalconApp(QMainWindow):
         self.xfoil_figure.clear()
 
         ax1 = self.xfoil_figure.add_subplot(211)
-        ax1.set_facecolor('#2b2b2b')
-        ax1.tick_params(colors='#f8f8f2')
-        ax1.xaxis.label.set_color('#f8f8f2')
-        ax1.yaxis.label.set_color('#f8f8f2')
-        ax1.title.set_color('#f8f8f2')
+        ax1.set_facecolor(COLORS['axes'])
+        ax1.tick_params(colors=COLORS['text'])
+        ax1.xaxis.label.set_color(COLORS['text'])
+        ax1.yaxis.label.set_color(COLORS['text'])
+        ax1.title.set_color(COLORS['text'])
         for spine in ax1.spines.values():
-            spine.set_edgecolor('#555555')
+            spine.set_edgecolor(COLORS['grid'])
         if polar_data:
             try:
                 pd = np.array(polar_data)
@@ -437,21 +443,21 @@ class FalconApp(QMainWindow):
                 ax1.set_xlabel("Cd")
                 ax1.set_ylabel("Cl")
                 ax1.set_title(f"Polar Plot (Re={Re})")
-                ax1.grid(True, color='#555555')
-                ax1.legend(facecolor='#3a3a3a', labelcolor='#f8f8f2')
+                ax1.grid(True, color=COLORS['grid'])
+                ax1.legend(facecolor=COLORS['legend'], labelcolor=COLORS['text'])
             except Exception as e:
                 print(f"Polar Plotting Error: {e}")
         else:
             ax1.text(0.5, 0.5, "Convergence Failed", ha='center', color='#ff5555')
 
         ax2 = self.xfoil_figure.add_subplot(212)
-        ax2.set_facecolor('#2b2b2b')
-        ax2.tick_params(colors='#f8f8f2')
-        ax2.xaxis.label.set_color('#f8f8f2')
-        ax2.yaxis.label.set_color('#f8f8f2')
-        ax2.title.set_color('#f8f8f2')
+        ax2.set_facecolor(COLORS['axes'])
+        ax2.tick_params(colors=COLORS['text'])
+        ax2.xaxis.label.set_color(COLORS['text'])
+        ax2.yaxis.label.set_color(COLORS['text'])
+        ax2.title.set_color(COLORS['text'])
         for spine in ax2.spines.values():
-            spine.set_edgecolor('#555555')
+            spine.set_edgecolor(COLORS['grid'])
 
         try:
             try:
@@ -491,11 +497,11 @@ class FalconApp(QMainWindow):
                 ax2.set_xlabel("x/c")
                 ax2.set_ylabel("Cp")
                 ax2.set_title("Pressure Coefficients")
-                ax2.grid(True, color='#555555')
+                ax2.grid(True, color=COLORS['grid'])
                 if lines_plotted <= 10:
-                    ax2.legend(fontsize='x-small', ncol=2, facecolor='#3a3a3a', labelcolor='#f8f8f2')
+                    ax2.legend(fontsize='x-small', ncol=2, facecolor=COLORS['legend'], labelcolor=COLORS['text'])
             else:
-                ax2.text(0.5, 0.5, "No Cp Data Available", ha='center', color='#f8f8f2')
+                ax2.text(0.5, 0.5, "No Cp Data Available", ha='center', color=COLORS['text'])
 
         except Exception as e:
             print(f"Cp Plotting Error: {e}")
@@ -650,8 +656,8 @@ class FalconApp(QMainWindow):
 
         self.res_subtabs = QTabWidget()
 
-        self.su2_polar_canv = FigureCanvasQTAgg(Figure(facecolor='#1e1e1e'))
-        self.su2_polar_canv.setStyleSheet("background-color: #1e1e1e;")
+        self.su2_polar_canv = FigureCanvasQTAgg(Figure(facecolor=COLORS['fig']))
+        self.su2_polar_canv.setStyleSheet(f"background-color: {COLORS['fig']};")
         self.su2_polar_tool = NavigationToolbar2QT(self.su2_polar_canv, t_res)
         w_pol = QWidget()
         l_pol = QVBoxLayout(w_pol)
@@ -1024,7 +1030,7 @@ class FalconApp(QMainWindow):
         self.achieved_yplus_label.setText(f"Design y+ (mesh): {design}\nAchieved y+ (solution): {achieved}")
         warn = isinstance(self._achieved_yplus, str) and self._achieved_yplus.startswith("max") and \
             self._achieved_yplus_max is not None and self._achieved_yplus_max > 5.0
-        self.achieved_yplus_label.setStyleSheet("color: #ff8f5a;" if warn else "color: #999999;")
+        self.achieved_yplus_label.setStyleSheet(f"color: {COLORS['yplus_warn'] if warn else COLORS['yplus']};")
 
     def update_design_yplus(self, mesh_path):
         """Wall spacing read back off the generated mesh. Needs no solver."""
@@ -1075,21 +1081,21 @@ class FalconApp(QMainWindow):
         self.update_achieved_yplus(results)
         self.su2_polar_canv.figure.clear()
         ax = self.su2_polar_canv.figure.add_subplot(111)
-        ax.set_facecolor('#2b2b2b')
-        ax.tick_params(colors='#f8f8f2')
-        ax.xaxis.label.set_color('#f8f8f2')
-        ax.yaxis.label.set_color('#f8f8f2')
-        ax.title.set_color('#f8f8f2')
+        ax.set_facecolor(COLORS['axes'])
+        ax.tick_params(colors=COLORS['text'])
+        ax.xaxis.label.set_color(COLORS['text'])
+        ax.yaxis.label.set_color(COLORS['text'])
+        ax.title.set_color(COLORS['text'])
         for spine in ax.spines.values():
-            spine.set_edgecolor('#555555')
+            spine.set_edgecolor(COLORS['grid'])
         AoA, Cl, Cd, Cm = extract_su2_polar_data(results)
 
         if Cl and Cd and not all(np.isnan(Cl)):
-            ax.plot(Cd, Cl, 'o-', color='#62b6ef')
+            ax.plot(Cd, Cl, 'o-', color=COLORS['polar'])
             ax.set_xlabel("Cd");
             ax.set_ylabel("Cl");
             ax.set_title("SU2 Polar")
-            ax.grid(True, color='#555555')
+            ax.grid(True, color=COLORS['grid'])
         self.su2_polar_canv.draw()
 
         while self.visual_layout.count():
@@ -1644,25 +1650,28 @@ if __name__ == "__main__":
     from PyQt6.QtGui import QPalette, QColor
     from PyQt6.QtCore import Qt
 
-    dark_palette = QPalette()
-    dark_palette.setColor(QPalette.ColorRole.Window,          QColor(43, 43, 43))
-    dark_palette.setColor(QPalette.ColorRole.WindowText,      QColor(248, 248, 242))
-    dark_palette.setColor(QPalette.ColorRole.Base,            QColor(30, 30, 30))
-    dark_palette.setColor(QPalette.ColorRole.AlternateBase,   QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.ColorRole.ToolTipBase,     QColor(248, 248, 242))
-    dark_palette.setColor(QPalette.ColorRole.ToolTipText,     QColor(248, 248, 242))
-    dark_palette.setColor(QPalette.ColorRole.Text,            QColor(248, 248, 242))
-    dark_palette.setColor(QPalette.ColorRole.Button,          QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.ColorRole.ButtonText,      QColor(248, 248, 242))
-    dark_palette.setColor(QPalette.ColorRole.BrightText,      QColor(255, 85, 85))
-    dark_palette.setColor(QPalette.ColorRole.Link,            QColor(98, 182, 239))
-    dark_palette.setColor(QPalette.ColorRole.Highlight,       QColor(98, 182, 239))
-    dark_palette.setColor(QPalette.ColorRole.HighlightedText, QColor(0, 0, 0))
-    dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor(127, 127, 127))
-    dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text,       QColor(127, 127, 127))
-    dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(127, 127, 127))
-    app.setPalette(dark_palette)
-    app.setStyleSheet("QToolTip { color: #f8f8f2; background-color: #2b2b2b; border: 1px solid #62b6ef; }")
+    if app.styleHints().colorScheme() == Qt.ColorScheme.Light:
+        COLORS.update(LIGHT_COLORS)
+    else:
+        dark_palette = QPalette()
+        dark_palette.setColor(QPalette.ColorRole.Window,          QColor(43, 43, 43))
+        dark_palette.setColor(QPalette.ColorRole.WindowText,      QColor(248, 248, 242))
+        dark_palette.setColor(QPalette.ColorRole.Base,            QColor(30, 30, 30))
+        dark_palette.setColor(QPalette.ColorRole.AlternateBase,   QColor(53, 53, 53))
+        dark_palette.setColor(QPalette.ColorRole.ToolTipBase,     QColor(248, 248, 242))
+        dark_palette.setColor(QPalette.ColorRole.ToolTipText,     QColor(248, 248, 242))
+        dark_palette.setColor(QPalette.ColorRole.Text,            QColor(248, 248, 242))
+        dark_palette.setColor(QPalette.ColorRole.Button,          QColor(53, 53, 53))
+        dark_palette.setColor(QPalette.ColorRole.ButtonText,      QColor(248, 248, 242))
+        dark_palette.setColor(QPalette.ColorRole.BrightText,      QColor(255, 85, 85))
+        dark_palette.setColor(QPalette.ColorRole.Link,            QColor(98, 182, 239))
+        dark_palette.setColor(QPalette.ColorRole.Highlight,       QColor(98, 182, 239))
+        dark_palette.setColor(QPalette.ColorRole.HighlightedText, QColor(0, 0, 0))
+        dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor(127, 127, 127))
+        dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text,       QColor(127, 127, 127))
+        dark_palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(127, 127, 127))
+        app.setPalette(dark_palette)
+        app.setStyleSheet("QToolTip { color: #f8f8f2; background-color: #2b2b2b; border: 1px solid #62b6ef; }")
 
     window = FalconApp()
     window.show()
